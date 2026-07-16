@@ -23,12 +23,15 @@ PleasureLib currently provides generic helpers for:
 - Delayed callbacks and game-thread callbacks
 - Defensive hook registration
 - Focused runtime capture of newly created UE objects
-- Localized native ON/OFF settings under Settings -> Game -> Mods
+- Localized native ON/OFF settings on a dedicated Settings -> Mods page
 
-The native settings API creates the game's own settings row and boolean widget,
-prevents duplicate entries across menu recreation, and can persist changes to a
-mod INI. This gives dependent mods a shared way to expose settings without
-shipping a custom menu.
+The native settings API activates the game's unused native test page as a
+dedicated Mods category. It creates native settings rows and boolean widgets,
+groups them by mod, and can persist changes to a mod INI.
+
+Version 0.4.0 moves mod settings out of the vanilla Game page. The dedicated
+Mods page owns its complete row container, avoiding conflicts with category
+reinitialization and allowing every mod to receive its own section.
 
 The library intentionally avoids mod-specific gameplay behavior. It is meant to
 stay small, boring, and reusable.
@@ -126,7 +129,7 @@ Do not remove it while installed mods still list it as a requirement.
 
 ## Current Version
 
-`0.3.31`
+`0.4.0`
 
 ## Credits
 

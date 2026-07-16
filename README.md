@@ -5,8 +5,8 @@ Shared UE4SS Lua helpers for Gothic 1 Remake mods.
 PleasureLib reduces repeated defensive Lua code across mods. It deliberately
 contains only generic helpers: logging, protected calls, INI parsing and
 updates, UE object validation and lookup, delayed callbacks, hook registration,
-runtime object capture, and native mod settings under the game's Game settings
-page.
+runtime object capture, and native mod settings on a dedicated Mods page in the
+game's settings menu.
 
 ## Documentation
 

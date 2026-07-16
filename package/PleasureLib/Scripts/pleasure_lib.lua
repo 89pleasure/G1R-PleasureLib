@@ -1,4 +1,4 @@
-local VERSION = "0.3.31"
+local VERSION = "0.4.43"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -176,9 +176,19 @@ local function write_text_file(path, content)
     return true
 end
 
-local GAME_SETTINGS_PAGE_CLASS =
-    "/Game/UI/CoreMenus/Settings/W_SettingsPage_Game.W_SettingsPage_Game_C"
-local GAME_SETTINGS_PAGE_ACTIVATED = GAME_SETTINGS_PAGE_CLASS .. ":BP_OnActivated"
+local MOD_SETTINGS_MAIN_CLASS =
+    "/Game/UI/CoreMenus/Settings/W_SettingsMain.W_SettingsMain_C"
+local MOD_SETTINGS_PAGE_CLASS =
+    "/Game/UI/CoreMenus/Settings/W_SettingsPage_Test.W_SettingsPage_Test_C"
+local MOD_SETTINGS_PAGE_ACTIVATED = MOD_SETTINGS_PAGE_CLASS .. ":BP_OnActivated"
+local SETTINGS_MAIN_CREATE_PAGE_BUTTONS =
+    "/Script/G1R.SettingsMainWidget:CreatePageButtons"
+local SETTINGS_MAIN_FOCUS_ACTIVE_BUTTON =
+    "/Script/G1R.SettingsMainWidget:FocusActiveButton"
+local SETTINGS_MAIN_ACTIVE_PAGE_CHANGED = MOD_SETTINGS_MAIN_CLASS
+    .. ":BndEvt__W_SettingsMain_WidgetSwitcher_Pages_"
+    .. "K2Node_ComponentBoundEvent_1_"
+    .. "OnActiveIndexChangedDelegate__DelegateSignature"
 local SETTINGS_PAGE_REINITIALIZE = "/Script/G1R.SettingsPageWidget:Reinitialize"
 local SETTINGS_PAGE_APPLY_CHANGES = "/Script/G1R.SettingsPageWidget:ApplyChanges"
 local SETTINGS_PAGE_DISCARD_CHANGES = "/Script/G1R.SettingsPageWidget:DiscardChanges"
@@ -200,7 +210,7 @@ local BOOL_SETTING_SET_VALUE = "/Script/G1R.SettingObject_Bool:SetValue"
 local WIDGET_BLUEPRINT_LIBRARY = "/Script/UMG.Default__WidgetBlueprintLibrary"
 local INTERNATIONALIZATION_LIBRARY =
     "/Script/Engine.Default__KismetInternationalizationLibrary"
-
+local WIDGET_VISIBILITY_COLLAPSED = 1
 local MOD_SECTION_TRANSLATIONS = {
     en = "Mods",
     de = "Mods",
@@ -219,7 +229,11 @@ local game_settings_state = {
     entries = {},
     order = {},
     pages = {},
-    notify_registered = false,
+    main_notify_registered = false,
+    page_notify_registered = false,
+    create_page_buttons_hook_registered = false,
+    focus_active_button_hook_registered = false,
+    active_page_changed_hook_registered = false,
     page_activated_hook_registered = false,
     page_reinitialize_hook_registered = false,
     page_apply_hook_registered = false,
@@ -227,6 +241,9 @@ local game_settings_state = {
     bool_widget_value_hook_registered = false,
     bool_setting_value_hook_registered = false,
     bool_widget_changed_hook_registered = false,
+    observed_mains = {},
+    native_pages_by_main = {},
+    create_page_button_batches = {},
     bindings_by_widget = {},
     bindings_by_setting = {},
 }
@@ -244,9 +261,9 @@ local function object_identity(object)
     return object_full_name(object)
 end
 
-local function is_game_settings_page(page)
+local function is_mod_settings_page(page)
     return is_valid_object(page)
-        and object_full_name(page):find("W_SettingsPage_Game_C", 1, true) ~= nil
+        and object_full_name(page):find("W_SettingsPage_Test_C", 1, true) ~= nil
 end
 
 local function set_object_property(object, property_name, value)
@@ -259,6 +276,54 @@ local function set_object_property(object, property_name, value)
         return true
     end)
     return fallback_ok and result == true
+end
+
+local function set_bool_property(object, property_name, value)
+    value = value == true
+    if not is_valid_object(object) then return false end
+
+    pcall(function() object[property_name] = value end)
+    local current = try(function() return object[property_name] end)
+    if current == value then return true end
+
+    pcall(function()
+        if type(object.SetPropertyValue) == "function" then
+            object:SetPropertyValue(property_name, value)
+        end
+    end)
+    current = try(function() return object[property_name] end)
+    return current == value
+end
+
+local function set_integer_property(object, property_name, value)
+    value = math.floor(tonumber(value) or 0)
+    if not is_valid_object(object) then return false end
+
+    pcall(function() object[property_name] = value end)
+    local current = try(function() return object[property_name] end)
+    if tonumber(current) == value then return true end
+
+    pcall(function()
+        if type(object.SetPropertyValue) == "function" then
+            object:SetPropertyValue(property_name, value)
+        end
+    end)
+    current = try(function() return object[property_name] end)
+    return tonumber(current) == value
+end
+
+local function configure_setting_availability(runtime, setting)
+    local platform_set = set_integer_property(setting,
+        "m_PlatformExclusivityMask", 0)
+    local input_set = set_integer_property(setting,
+        "m_InputAvailabilityMask", 0)
+    if not platform_set or not input_set then
+        runtime:debug_log("could not initialize setting availability masks"
+            .. " platform=" .. tostring(platform_set)
+            .. " input=" .. tostring(input_set))
+        return false
+    end
+    return true
 end
 
 local function current_language(runtime)
@@ -409,6 +474,7 @@ local function synchronize_binding(binding)
         return false
     end
 
+    configure_setting_availability(runtime, binding.setting)
     local name_text = update_setting_description(runtime, binding.setting, entry)
     runtime:try(function()
         if is_valid_object(binding.row.Text_Name) then
@@ -431,6 +497,7 @@ end
 
 local function enable_binding(binding)
     local runtime = binding.entry.runtime
+    configure_setting_availability(runtime, binding.setting)
     local set_enabled_function = runtime:find_object(
         GAME_SETTINGS_ROW_SET_ENABLED)
     if is_valid_object(set_enabled_function) then
@@ -448,23 +515,27 @@ local function enable_binding(binding)
     runtime:try(function() binding.widget.Slider_Value:SetIsEnabled(true) end)
 end
 
-local function ensure_mod_header(runtime, page, page_state, panel)
-    if is_valid_object(page_state.header) then
+local function ensure_mod_header(runtime, page, page_state, panel, section)
+    section = trim(section)
+    if section == "" then section = "Mods" end
+    page_state.headers = page_state.headers or {}
+    local header = page_state.headers[section]
+    if is_valid_object(header) then
         local parent = runtime:unwrap(runtime:try(function()
-            return page_state.header:GetParent()
+            return header:GetParent()
         end))
         if object_identity(parent) ~= object_identity(panel) then
             local added = runtime:try(function()
-                return panel:AddChildToVerticalBox(page_state.header)
+                return panel:AddChildToVerticalBox(header)
             end)
             if added == nil then return false end
         end
-        return true
+        return header
     end
-    local header = create_user_widget(runtime, page, GAME_SETTINGS_HEADER_CLASS)
-    if not is_valid_object(header) then return false end
+    header = create_user_widget(runtime, page, GAME_SETTINGS_HEADER_CLASS)
+    if not is_valid_object(header) then return nil end
 
-    local title_text = to_text(runtime, localized_section_name(runtime))
+    local title_text = to_text(runtime, section)
     set_object_property(header, "title", title_text)
     runtime:try(function()
         if is_valid_object(header.TextBlock_Title) then
@@ -474,10 +545,10 @@ local function ensure_mod_header(runtime, page, page_state, panel)
     local added = runtime:try(function()
         return panel:AddChildToVerticalBox(header)
     end)
-    if added == nil then return false end
+    if added == nil then return nil end
 
-    page_state.header = header
-    return true
+    page_state.headers[section] = header
+    return header
 end
 
 local function link_bool_setting_widget(runtime, row, widget, setting)
@@ -494,23 +565,36 @@ local function link_bool_setting_widget(runtime, row, widget, setting)
     return object_identity(linked_setting) == object_identity(setting)
 end
 
+local function current_row_setting_widget(runtime, row)
+    local widget = runtime:unwrap(runtime:try(function()
+        return row.m_SettingWidget
+    end))
+    local container = runtime:unwrap(runtime:try(function()
+        return row.SizeBox_SettingsEntry
+    end))
+    local content = runtime:unwrap(runtime:try(function()
+        return container:GetContent()
+    end))
+    if is_valid_object(content) then return content end
+    if is_valid_object(widget) then return widget end
+    return nil
+end
+
 local function create_bool_setting_widget(runtime, row, setting)
+    local widget = current_row_setting_widget(runtime, row)
+    if is_valid_object(widget)
+        and link_bool_setting_widget(runtime, row, widget, setting)
+    then
+        return widget, nil
+    end
+
     local create_widget_function = runtime:find_object(
         GAME_SETTINGS_ROW_CREATE_WIDGET)
     if is_valid_object(create_widget_function) then
         local ok, result = pcall(function()
             return create_widget_function(row)
         end)
-        local widget = runtime:unwrap(runtime:try(function()
-            return row.m_SettingWidget
-        end))
-        local container = runtime:unwrap(runtime:try(function()
-            return row.SizeBox_SettingsEntry
-        end))
-        local content = runtime:unwrap(runtime:try(function()
-            return container:GetContent()
-        end))
-        if is_valid_object(content) then widget = content end
+        widget = current_row_setting_widget(runtime, row)
 
         if ok and is_valid_object(widget)
             and link_bool_setting_widget(runtime, row, widget, setting)
@@ -522,7 +606,7 @@ local function create_bool_setting_widget(runtime, row, setting)
             .. " ok=" .. tostring(ok)
             .. " result=" .. safe_to_string(runtime:unwrap(result))
             .. " widget=" .. object_full_name(widget)
-            .. " content=" .. object_full_name(content))
+            .. " content=" .. object_full_name(widget))
     end
 
     runtime:debug_log("falling back to direct bool widget creation")
@@ -589,6 +673,7 @@ local function ensure_binding_attached(runtime, binding, panel)
         return binding.row:GetParent()
     end))
     if object_identity(parent) ~= object_identity(panel) then
+        runtime:try(function() binding.row:RemoveFromParent() end)
         local added = runtime:try(function()
             return panel:AddChildToVerticalBox(binding.row)
         end)
@@ -640,25 +725,37 @@ end
 local function inject_bool_setting(runtime, page, page_state, entry, panel)
     local existing_binding = page_state.bindings[entry.id]
     if existing_binding ~= nil
-        and ensure_binding_attached(runtime, existing_binding, panel)
+        and is_valid_object(existing_binding.row)
+        and is_valid_object(existing_binding.setting)
     then
-        return synchronize_binding(existing_binding)
-    elseif existing_binding ~= nil then
+        existing_binding.entry = entry
+        existing_binding.page = page
+        if ensure_binding_attached(runtime, existing_binding, panel) then
+            page_state.bindings[entry.id] = existing_binding
+            return synchronize_binding(existing_binding)
+        end
+    end
+    if existing_binding ~= nil then
         unindex_binding(existing_binding)
         runtime:try(function() existing_binding.row:RemoveFromParent() end)
         page_state.bindings[entry.id] = nil
     end
 
-    local row = create_user_widget(runtime, page, GAME_SETTINGS_ROW_CLASS)
+    local use_native_row = page_state.native_bool_claimed ~= true
+        and is_valid_object(page_state.native_bool_row)
+    local row = use_native_row and page_state.native_bool_row
+        or create_user_widget(runtime, page, GAME_SETTINGS_ROW_CLASS)
     if not is_valid_object(row) then
-        runtime:debug_log("game setting '" .. entry.id
+        runtime:debug_log("mod setting '" .. entry.id
             .. "' failed: settings row could not be created")
         return false
     end
-    local setting = construct_object(runtime, GAME_SETTINGS_BOOL_OBJECT_CLASS, row)
+    local setting = use_native_row and runtime:unwrap(runtime:try(function()
+        return row.m_Setting
+    end)) or construct_object(runtime, GAME_SETTINGS_BOOL_OBJECT_CLASS, row)
     if not is_valid_object(setting) then
-        runtime:debug_log("game setting '" .. entry.id
-            .. "' failed: bool setting object could not be constructed")
+        runtime:debug_log("mod setting '" .. entry.id
+            .. "' failed: bool setting object unavailable")
         return false
     end
 
@@ -667,8 +764,10 @@ local function inject_bool_setting(runtime, page, page_state, entry, panel)
     set_object_property(setting, "m_DefaultValue", value)
     -- Both are restriction masks. Zero matches an unrestricted native Game
     -- setting and avoids relying on the page's row registry during cold-start.
-    set_object_property(setting, "m_PlatformExclusivityMask", 0)
-    set_object_property(setting, "m_InputAvailabilityMask", 0)
+    if not configure_setting_availability(runtime, setting) then
+        runtime:debug_log("mod setting '" .. entry.id
+            .. "' availability initialization failed")
+    end
 
     runtime:try(function() setting:SetValue(value) end)
     runtime:try(function() setting:ConfirmValue() end)
@@ -678,19 +777,33 @@ local function inject_bool_setting(runtime, page, page_state, entry, panel)
     runtime:try(function()
         if is_valid_object(row.Text_Name) then row.Text_Name:SetText(name_text) end
     end)
+    -- The native Test-page bool row is already fully initialized. Newly
+    -- created rows need Reinitialize before we retain their visible widget.
+    if not use_native_row then
+        runtime:try(function() row:Reinitialize() end)
+    end
+    configure_setting_availability(runtime, setting)
     local widget, widget_error = create_bool_setting_widget(runtime, row, setting)
     if not is_valid_object(widget) then
-        runtime:debug_log("game setting '" .. entry.id
+        runtime:debug_log("mod setting '" .. entry.id
             .. "' failed: " .. tostring(widget_error))
         return false
     end
-    runtime:try(function() row:Reinitialize() end)
+    configure_setting_availability(runtime, setting)
+    link_bool_setting_widget(runtime, row, widget, setting)
     runtime:try(function() widget:SetValue(value, true) end)
-    local added = runtime:try(function() return panel:AddChildToVerticalBox(row) end)
-    if added == nil then
-        runtime:debug_log("game setting '" .. entry.id
-            .. "' failed: row could not be added to Game settings panel")
-        return false
+    local parent = runtime:unwrap(runtime:try(function()
+        return row:GetParent()
+    end))
+    if object_identity(parent) ~= object_identity(panel) then
+        local added = runtime:try(function()
+            return panel:AddChildToVerticalBox(row)
+        end)
+        if added == nil then
+            runtime:debug_log("mod setting '" .. entry.id
+                .. "' failed: row could not be added to Mods settings panel")
+            return false
+        end
     end
 
     local binding = {
@@ -703,18 +816,152 @@ local function inject_bool_setting(runtime, page, page_state, entry, panel)
     }
     if not append_settings_row(page, row) then
         runtime:try(function() row:RemoveFromParent() end)
-        runtime:debug_log("game setting '" .. entry.id
+        runtime:debug_log("mod setting '" .. entry.id
             .. "' failed: row could not be appended to page registry")
         return false
     end
     page_state.bindings[entry.id] = binding
+    if use_native_row then page_state.native_bool_claimed = true end
     index_binding(binding)
     return true
 end
 
+local function ensure_mod_section_order(runtime, page_state, panel)
+    local section_widgets = {}
+    local added_sections = {}
+    for _, id in ipairs(game_settings_state.order) do
+        local entry = game_settings_state.entries[id]
+        local binding = page_state.bindings[id]
+        local section = entry and entry.section or "Mods"
+        if added_sections[section] ~= true then
+            local header = page_state.headers and page_state.headers[section]
+            if is_valid_object(header) then table.insert(section_widgets, header) end
+            added_sections[section] = true
+        end
+        if binding ~= nil and is_valid_object(binding.row) then
+            table.insert(section_widgets, binding.row)
+        end
+    end
+    if #section_widgets == 0 then return true end
+
+    local child_count = tonumber(runtime:unwrap(runtime:try(function()
+        return panel:GetChildrenCount()
+    end))) or 0
+    local first_section_index = child_count - #section_widgets
+    local correctly_ordered = first_section_index >= 0
+    if correctly_ordered then
+        for offset, widget in ipairs(section_widgets) do
+            local child = runtime:unwrap(runtime:try(function()
+                return panel:GetChildAt(first_section_index + offset - 1)
+            end))
+            if object_identity(child) ~= object_identity(widget) then
+                correctly_ordered = false
+                break
+            end
+        end
+    end
+    if correctly_ordered then return true end
+
+    for _, widget in ipairs(section_widgets) do
+        runtime:try(function() widget:RemoveFromParent() end)
+    end
+    for _, widget in ipairs(section_widgets) do
+        local added = runtime:try(function()
+            return panel:AddChildToVerticalBox(widget)
+        end)
+        if added == nil then
+            runtime:debug_log("native Mods settings section reorder failed")
+            return false
+        end
+    end
+    return true
+end
+
+local function initialize_mod_settings_page(runtime, page, page_state, panel)
+    if page_state.initialized == true then return true end
+
+    local rows = runtime:try(function() return page.m_SettingsRowWidgets end)
+    local native_bool_row = nil
+    if rows ~= nil then
+        for index = 1, #rows do
+            local row = runtime:unwrap(runtime:try(function() return rows[index] end))
+            local setting = runtime:unwrap(runtime:try(function()
+                return row.m_Setting
+            end))
+            if object_full_name(setting):find(
+                "SettingObject_Bool_Test", 1, true) ~= nil
+            then
+                native_bool_row = row
+                break
+            end
+        end
+    end
+    if not is_valid_object(native_bool_row) then
+        local child_count = tonumber(runtime:unwrap(runtime:try(function()
+            return panel:GetChildrenCount()
+        end))) or 0
+        for index = 0, child_count - 1 do
+            local child = runtime:unwrap(runtime:try(function()
+                return panel:GetChildAt(index)
+            end))
+            if object_full_name(child):find("SettingsRow_Bool", 1, true) ~= nil then
+                native_bool_row = child
+                break
+            end
+        end
+    end
+    if not is_valid_object(native_bool_row) then return false end
+    local native_bool_setting = runtime:unwrap(runtime:try(function()
+        return native_bool_row.m_Setting
+    end))
+    if not is_valid_object(native_bool_setting) then return false end
+
+    -- Keep Gothic's fully initialized bool row and collapse the unrelated
+    -- Enum/Float/Int test rows. Removing them is temporary because the page's
+    -- native Reinitialize adds its registered rows back on activation.
+    local children = {}
+    local child_count = tonumber(runtime:unwrap(runtime:try(function()
+        return panel:GetChildrenCount()
+    end))) or 0
+    for index = 0, child_count - 1 do
+        local child = runtime:unwrap(runtime:try(function()
+            return panel:GetChildAt(index)
+        end))
+        if is_valid_object(child) then table.insert(children, child) end
+    end
+    page_state.native_test_rows = {}
+    for _, child in ipairs(children) do
+        if object_identity(child) ~= object_identity(native_bool_row) then
+            set_object_property(child, "Visibility", WIDGET_VISIBILITY_COLLAPSED)
+            runtime:try(function()
+                child:SetVisibility(WIDGET_VISIBILITY_COLLAPSED)
+            end)
+            table.insert(page_state.native_test_rows, child)
+        end
+    end
+
+    page_state.bindings = {}
+    page_state.headers = {}
+    page_state.native_bool_row = native_bool_row
+    page_state.native_bool_claimed = false
+    page_state.initialized = true
+    return true
+end
+
+local function collapse_native_test_rows(runtime, page_state)
+    for _, row in ipairs(page_state.native_test_rows or {}) do
+        if is_valid_object(row) then
+            set_object_property(row, "Visibility", WIDGET_VISIBILITY_COLLAPSED)
+            runtime:try(function()
+                row:SetVisibility(WIDGET_VISIBILITY_COLLAPSED)
+            end)
+        end
+    end
+end
+
 local function inject_game_settings(runtime, page)
     page = runtime:unwrap(page)
-    if not is_valid_object(page) then return false end
+    if not is_mod_settings_page(page) then return false end
     local panel = runtime:unwrap(runtime:try(function()
         return page.VerticalBox_Content
     end))
@@ -724,26 +971,357 @@ local function inject_game_settings(runtime, page)
     if page_key == "" then return false end
     local page_state = game_settings_state.pages[page_key]
     if page_state == nil then
-        page_state = { page = page, bindings = {} }
+        page_state = { page = page, bindings = {}, headers = {} }
         game_settings_state.pages[page_key] = page_state
     end
-
-    if #game_settings_state.order > 0 then
-        ensure_mod_header(runtime, page, page_state, panel)
+    if not initialize_mod_settings_page(runtime, page, page_state, panel) then
+        runtime:log("Could not initialize the native Mods settings page")
+        return false
     end
+    collapse_native_test_rows(runtime, page_state)
+
     local injected = 0
     for _, id in ipairs(game_settings_state.order) do
         local entry = game_settings_state.entries[id]
-        if entry ~= nil and inject_bool_setting(runtime, page, page_state,
-            entry, panel)
+        if entry ~= nil then
+            ensure_mod_header(runtime, page, page_state, panel, entry.section)
+        end
+        if entry ~= nil and inject_bool_setting(runtime, page, page_state, entry,
+            panel)
         then
             injected = injected + 1
         end
     end
+    ensure_mod_section_order(runtime, page_state, panel)
     for _, binding in pairs(page_state.bindings) do
         enable_binding(binding)
     end
+    collapse_native_test_rows(runtime, page_state)
     return injected > 0
+end
+
+local function diagnostic_value(runtime, fn)
+    local value = runtime:unwrap(runtime:try(fn))
+    if value == nil then return "nil" end
+    return tostring(value)
+end
+
+local function diagnose_page_bindings(runtime, page)
+    local page_state = game_settings_state.pages[object_identity(page)]
+    if page_state == nil then return end
+
+    for id, binding in pairs(page_state.bindings) do
+        if binding.diagnostic_logged ~= true
+            and is_valid_object(binding.row)
+            and is_valid_object(binding.setting)
+            and is_valid_object(binding.widget)
+        then
+            local row_setting = runtime:unwrap(runtime:try(function()
+                return binding.row.m_Setting
+            end))
+            local row_widget = runtime:unwrap(runtime:try(function()
+                return binding.row.m_SettingWidget
+            end))
+            local widget_setting = runtime:unwrap(runtime:try(function()
+                return binding.widget.m_Setting
+            end))
+            local generic_setting = runtime:unwrap(runtime:try(function()
+                return binding.widget.m_GenericSetting
+            end))
+            local visible_widget = current_row_setting_widget(runtime,
+                binding.row)
+            runtime:log("Settings diagnostic id=" .. tostring(id)
+                .. " setting.available=" .. diagnostic_value(runtime,
+                    function() return binding.setting:IsAvailable() end)
+                .. " setting.supported=" .. diagnostic_value(runtime,
+                    function() return binding.setting:IsSupported() end)
+                .. " row.available=" .. diagnostic_value(runtime,
+                    function() return binding.row:IsAvailable() end)
+                .. " row.supported=" .. diagnostic_value(runtime,
+                    function() return binding.row:IsSupported() end)
+                .. " widget.available=" .. diagnostic_value(runtime,
+                    function() return binding.widget:IsAvailable() end)
+                .. " widget.supported=" .. diagnostic_value(runtime,
+                    function() return binding.widget:IsSupported() end)
+                .. " row.enabled=" .. diagnostic_value(runtime,
+                    function() return binding.row:GetIsEnabled() end)
+                .. " widget.enabled=" .. diagnostic_value(runtime,
+                    function() return binding.widget:GetIsEnabled() end)
+                .. " toggle.enabled=" .. diagnostic_value(runtime,
+                    function() return binding.widget.Button_Toggle:GetIsEnabled() end)
+                .. " platformMask=" .. diagnostic_value(runtime,
+                    function() return binding.setting.m_PlatformExclusivityMask end)
+                .. " inputMask=" .. diagnostic_value(runtime,
+                    function() return binding.setting.m_InputAvailabilityMask end)
+                .. " rowSettingMatch=" .. tostring(object_identity(row_setting)
+                    == object_identity(binding.setting))
+                .. " rowWidgetMatch=" .. tostring(object_identity(row_widget)
+                    == object_identity(binding.widget))
+                .. " visibleWidgetMatch=" .. tostring(
+                    object_identity(visible_widget)
+                    == object_identity(binding.widget))
+                .. " widgetSettingMatch=" .. tostring(
+                    object_identity(widget_setting)
+                    == object_identity(binding.setting))
+                .. " genericSettingMatch=" .. tostring(
+                    object_identity(generic_setting)
+                    == object_identity(binding.setting)))
+            binding.diagnostic_logged = true
+        end
+    end
+end
+
+local function switcher_widget_count(runtime, switcher)
+    local count = tonumber(runtime:unwrap(runtime:try(function()
+        return switcher:GetNumWidgets()
+    end)))
+    if count ~= nil then return count end
+
+    -- CommonActivatableWidgetSwitcher inherits PanelWidget. In this game its
+    -- concrete wrapper can expose the inherited panel methods even when the
+    -- WidgetSwitcher convenience methods are temporarily unavailable.
+    count = tonumber(runtime:unwrap(runtime:try(function()
+        return switcher:GetChildrenCount()
+    end)))
+    if count ~= nil then return count end
+
+    local slots = runtime:try(function() return switcher.Slots end)
+    if slots ~= nil then
+        return tonumber(runtime:try(function() return #slots end))
+    end
+    return nil
+end
+
+local function switcher_widget_at(runtime, switcher, index)
+    local page = runtime:unwrap(runtime:try(function()
+        return switcher:GetWidgetAtIndex(index)
+    end))
+    if is_valid_object(page) then return page end
+    page = runtime:unwrap(runtime:try(function()
+        return switcher:GetChildAt(index)
+    end))
+    if is_valid_object(page) then return page end
+
+    local slots = runtime:try(function() return switcher.Slots end)
+    local slot = runtime:unwrap(runtime:try(function()
+        return slots[index + 1]
+    end))
+    return runtime:unwrap(runtime:try(function()
+        return slot.Content
+    end))
+end
+
+local function find_mod_settings_page(runtime, switcher)
+    local count = switcher_widget_count(runtime, switcher) or 0
+    for index = 0, count - 1 do
+        local page = switcher_widget_at(runtime, switcher, index)
+        if is_mod_settings_page(page) then return page end
+    end
+    return nil
+end
+
+local function diagnose_native_settings_navigation(runtime, main, switcher,
+    phase)
+    main = runtime:unwrap(main)
+    switcher = runtime:unwrap(switcher)
+    if not is_valid_object(main) then return end
+
+    local buttons = runtime:try(function() return main.m_PageButtons end)
+    local button_count = tonumber(runtime:try(function()
+        return buttons:GetArrayNum()
+    end)) or tonumber(runtime:try(function() return #buttons end)) or -1
+    local button_parts = {}
+    runtime:try(function()
+        buttons:ForEach(function(index, element)
+            local button = runtime:unwrap(element)
+            table.insert(button_parts, tostring(index) .. "="
+                .. (is_valid_object(button)
+                    and object_full_name(button) or "<null>"))
+        end)
+    end)
+
+    local panel = runtime:unwrap(runtime:try(function()
+        return main.VerticalBox_PageButtons
+    end))
+    local panel_count = tonumber(runtime:try(function()
+        return panel:GetChildrenCount()
+    end)) or -1
+    local panel_parts = {}
+    if panel_count > 0 then
+        for index = 0, panel_count - 1 do
+            local button = runtime:unwrap(runtime:try(function()
+                return panel:GetChildAt(index)
+            end))
+            table.insert(panel_parts, tostring(index) .. "="
+                .. (is_valid_object(button)
+                    and object_full_name(button) or "<null>"))
+        end
+    end
+
+    local page_count = is_valid_object(switcher)
+        and (switcher_widget_count(runtime, switcher) or 0) or 0
+    local page_parts = {}
+    for index = 0, page_count - 1 do
+        local page = switcher_widget_at(runtime, switcher, index)
+        local raw_enabled = runtime:try(function()
+            return page.bIsEnabled
+        end) == true
+        local getter_enabled = runtime:try(function()
+            return page:GetIsEnabled()
+        end) == true
+        table.insert(page_parts, tostring(index) .. "="
+            .. (is_valid_object(page) and object_full_name(page) or "<null>")
+            .. ":raw=" .. tostring(raw_enabled)
+            .. ":getter=" .. tostring(getter_enabled))
+    end
+
+    runtime:log("Native settings navigation phase=" .. tostring(phase)
+        .. " arrayNum=" .. tostring(button_count)
+        .. " array=[" .. table.concat(button_parts, " | ") .. "]"
+        .. " panelChildren=" .. tostring(panel_count)
+        .. " panel=[" .. table.concat(panel_parts, " | ") .. "]"
+        .. " pages=" .. tostring(page_count)
+        .. " switcher=[" .. table.concat(page_parts, " | ") .. "]")
+end
+
+local function enable_mod_settings_page(runtime, page)
+    page = runtime:unwrap(page)
+    if not is_mod_settings_page(page) then return false end
+
+    -- SetIsEnabled(true) is accepted by UE4SS for this widget but leaves the
+    -- reflected bit false. CreatePageButtons reads this exact UWidget bit
+    -- (offset 0xD9, mask 0x04), so update and verify it directly.
+    local written = set_bool_property(page, "bIsEnabled", true)
+    local raw_enabled = runtime:try(function()
+        return page.bIsEnabled
+    end) == true
+    local getter_enabled = runtime:try(function()
+        return page:GetIsEnabled()
+    end) == true
+    return written and raw_enabled,
+        raw_enabled, getter_enabled
+end
+
+local function settings_page_button_for(runtime, main, switcher, target_page,
+    button_base, resolve_button)
+    local settings_page_class = runtime:find_object(
+        "/Script/G1R.SettingsPageWidget")
+    if not is_valid_object(settings_page_class) then return nil end
+
+    local ordinal = 0
+    local target_ordinal = nil
+    local count = switcher_widget_count(runtime, switcher) or 0
+    for index = 0, count - 1 do
+        local page = switcher_widget_at(runtime, switcher, index)
+        local is_settings_page = is_valid_object(page)
+            and runtime:try(function()
+                return page:IsA(settings_page_class)
+            end) == true
+        local enabled = is_settings_page and runtime:try(function()
+            return page.bIsEnabled
+        end) == true
+        if enabled then
+            ordinal = ordinal + 1
+            if object_identity(page) == object_identity(target_page) then
+                target_ordinal = ordinal
+            end
+        end
+    end
+    if target_ordinal == nil then return nil, nil, ordinal end
+    -- Never index the still-empty native TArray from CreatePageButtons' pre-
+    -- hook. UE4SS grows a TArray when an out-of-range index is accessed, which
+    -- would insert a null slot before Gothic appends its real buttons.
+    if resolve_button == false then
+        return nil, target_ordinal, ordinal
+    end
+    return runtime:unwrap(runtime:try(function()
+        return main.m_PageButtons[
+            (tonumber(button_base) or 0) + target_ordinal]
+    end)), target_ordinal, ordinal
+end
+
+local function finalize_native_mod_settings_page(runtime, main,
+    supplied_switcher, button_base)
+    main = runtime:unwrap(main)
+    if not is_valid_object(main)
+        or object_full_name(main):find("W_SettingsMain_C", 1, true) == nil
+    then
+        return nil
+    end
+    local switcher = runtime:unwrap(supplied_switcher)
+    if not is_valid_object(switcher) then
+        switcher = runtime:unwrap(runtime:try(function()
+            return main.WidgetSwitcher_Pages
+        end))
+    end
+    if not is_valid_object(switcher) then return nil end
+
+    local page = find_mod_settings_page(runtime, switcher)
+    if not is_valid_object(page) then return nil end
+    enable_mod_settings_page(runtime, page)
+
+    local main_key = object_identity(main)
+    if main_key == "" then return page end
+
+    local state = game_settings_state.native_pages_by_main[main_key]
+    local button = state and runtime:unwrap(state.button) or nil
+    local ordinal = state and state.ordinal or nil
+    -- SettingsMain can be reused. Gothic then clears the visible panel and
+    -- appends a fresh native button batch while the previous button UObjects
+    -- remain valid in m_PageButtons. An explicit batch base must therefore
+    -- always replace the cached (now hidden) button with the new visible one.
+    if button_base ~= nil or not is_valid_object(button) then
+        button, ordinal = settings_page_button_for(runtime, main, switcher,
+            page, button_base)
+    end
+    if not is_valid_object(button) then return page end
+
+    local display_name = to_text(runtime, localized_section_name(runtime))
+    runtime:try(function() button:SetDisplayName(display_name) end)
+    runtime:try(function()
+        if is_valid_object(button.TextBlock_Name) then
+            button.TextBlock_Name:SetText(display_name)
+        end
+    end)
+    if state == nil then
+        state = {}
+        game_settings_state.native_pages_by_main[main_key] = state
+    end
+    state.main = main
+    state.page = page
+    state.button = button
+    state.ordinal = ordinal
+    if state.logged ~= true then
+        runtime:log("Native Mods settings page enabled at button "
+            .. tostring(ordinal))
+        state.logged = true
+    end
+    return page, button
+end
+
+local function activate_native_mod_settings_page(runtime, page)
+    page = runtime:unwrap(page)
+    if not is_mod_settings_page(page) then return false end
+
+    local display_name = to_text(runtime, localized_section_name(runtime))
+    for _, state in pairs(game_settings_state.native_pages_by_main) do
+        if object_identity(state.page) == object_identity(page) then
+            runtime:try(function()
+                state.button:SetDisplayName(display_name)
+            end)
+            runtime:try(function()
+                if is_valid_object(state.button.TextBlock_Name) then
+                    state.button.TextBlock_Name:SetText(display_name)
+                end
+            end)
+            runtime:try(function()
+                if is_valid_object(state.main.TextBlock_Title) then
+                    state.main.TextBlock_Title:SetText(display_name)
+                end
+            end)
+        end
+    end
+    return inject_game_settings(runtime, page)
 end
 
 local function apply_bool_setting_value(binding, value)
@@ -810,10 +1388,12 @@ end
 
 local function commit_game_settings_page(runtime, page)
     page = runtime:unwrap(page)
-    if not is_game_settings_page(page) then return end
+    if not is_mod_settings_page(page) then return end
 
     local page_state = game_settings_state.pages[object_identity(page)]
     if page_state == nil then return end
+
+    runtime:log("Native Mods settings commit begin")
 
     for _, binding in pairs(page_state.bindings) do
         if is_valid_object(binding.setting) then
@@ -845,6 +1425,7 @@ local function commit_game_settings_page(runtime, page)
             end
         end
     end
+    runtime:log("Native Mods settings commit end")
 end
 
 local function binding_for_bool_widget(runtime, context)
@@ -901,13 +1482,177 @@ local function binding_for_bool_widget(runtime, context)
 end
 
 local function ensure_game_settings_hooks(runtime)
-    if game_settings_state.page_activated_hook_registered ~= true
-        and is_valid_object(runtime:find_object(GAME_SETTINGS_PAGE_ACTIVATED))
+    if game_settings_state.create_page_buttons_hook_registered ~= true
+        and is_valid_object(runtime:find_object(
+            SETTINGS_MAIN_CREATE_PAGE_BUTTONS))
     then
-        if runtime:register_hook(GAME_SETTINGS_PAGE_ACTIVATED, function(context)
+        if runtime:register_hook(SETTINGS_MAIN_CREATE_PAGE_BUTTONS,
+            function(context, pages_switcher)
+                local main = runtime:unwrap(context)
+                if object_full_name(main):find(
+                    "W_SettingsMain_C", 1, true) == nil
+                then
+                    return nil
+                end
+
+                -- Use the UFunction parameter. During W_SettingsMain
+                -- construction, the bound WidgetSwitcher_Pages property is
+                -- not guaranteed to be initialized before this call.
+                local switcher = runtime:unwrap(pages_switcher)
+                local page_count = switcher_widget_count(runtime, switcher)
+                    or 0
+                local page = find_mod_settings_page(runtime, switcher)
+                local raw_before = is_valid_object(page)
+                    and runtime:try(function()
+                        return page.bIsEnabled
+                    end) == true
+                local enabled_before = is_valid_object(page)
+                    and runtime:try(function()
+                        return page:GetIsEnabled()
+                    end) == true
+                -- CreatePageButtons skips every SettingsPageWidget for which
+                -- UWidget::GetIsEnabled() returns false. Enabling the dormant
+                -- Test page here lets Gothic create and bind its native button.
+                local enabled_after, raw_after, getter_after =
+                    enable_mod_settings_page(runtime, page)
+                local main_key = object_identity(main)
+                local button_base = tonumber(runtime:try(function()
+                    return #main.m_PageButtons
+                end)) or 0
+                local _, target_ordinal, expected_buttons =
+                    settings_page_button_for(runtime, main, switcher, page,
+                        button_base, false)
+                if main_key ~= "" then
+                    game_settings_state.create_page_button_batches[main_key] = {
+                        button_base = button_base,
+                        target_ordinal = target_ordinal,
+                        expected_buttons = expected_buttons,
+                    }
+                end
+                runtime:log("CreatePageButtons pre pages="
+                    .. tostring(page_count)
+                    .. " modPage=" .. tostring(is_valid_object(page))
+                    .. " rawBefore=" .. tostring(raw_before)
+                    .. " enabledBefore=" .. tostring(enabled_before)
+                    .. " rawAfter=" .. tostring(raw_after)
+                    .. " getterAfter=" .. tostring(getter_after)
+                    .. " enabledAfter=" .. tostring(enabled_after)
+                    .. " targetOrdinal=" .. tostring(target_ordinal)
+                    .. " expectedButtons=" .. tostring(expected_buttons))
+                return nil
+            end,
+            function(context, pages_switcher)
+                local main = runtime:unwrap(context)
+                if object_full_name(main):find(
+                    "W_SettingsMain_C", 1, true) == nil
+                then
+                    return nil
+                end
+
+                local main_key = object_identity(main)
+                if main_key ~= "" then
+                    game_settings_state.observed_mains[main_key] = main
+                end
+                local switcher = runtime:unwrap(pages_switcher)
+                local button_count = tonumber(runtime:try(function()
+                    return #main.m_PageButtons
+                end)) or 0
+                local batch = game_settings_state.create_page_button_batches[
+                    main_key]
+                local button_base = batch and batch.button_base or 0
+                local expected_buttons = batch and batch.expected_buttons or 0
+                game_settings_state.create_page_button_batches[main_key] = nil
+                local added_buttons = button_count - button_base
+                runtime:log("CreatePageButtons post base="
+                    .. tostring(button_base)
+                    .. " nativeButtons=" .. tostring(button_count)
+                    .. " added=" .. tostring(added_buttons)
+                    .. " expected=" .. tostring(expected_buttons))
+                diagnose_native_settings_navigation(runtime, main, switcher,
+                    "create-post")
+                -- The switcher can contain native pages that Gothic includes
+                -- independently of their reflected bIsEnabled value. Require
+                -- at least the complete raw-enabled batch: this accepts the
+                -- observed stable 9/8 build while rejecting the unsafe 7/8
+                -- partial build from 0.4.38.
+                if expected_buttons > 0
+                    and added_buttons >= expected_buttons
+                then
+                    runtime:delay_game_thread(0, function()
+                        finalize_native_mod_settings_page(runtime, main,
+                            switcher, button_base)
+                    end)
+                else
+                    runtime:log("Native Mods page was skipped; deferring "
+                        .. "finalization until the next page-button build")
+                end
+                return nil
+            end
+        ) then
+            game_settings_state.create_page_buttons_hook_registered = true
+        end
+    end
+
+    if game_settings_state.focus_active_button_hook_registered ~= true
+        and is_valid_object(runtime:find_object(
+            SETTINGS_MAIN_FOCUS_ACTIVE_BUTTON))
+    then
+        if runtime:register_hook(SETTINGS_MAIN_FOCUS_ACTIVE_BUTTON,
+            function()
+                return nil
+            end,
+            function(context)
+                local main = runtime:unwrap(context)
+                if object_full_name(main):find(
+                    "W_SettingsMain_C", 1, true) ~= nil
+                then
+                    runtime:delay_game_thread(0, function()
+                        finalize_native_mod_settings_page(runtime, main)
+                    end)
+                end
+                return nil
+            end
+        ) then
+            game_settings_state.focus_active_button_hook_registered = true
+        end
+    end
+
+    if game_settings_state.active_page_changed_hook_registered ~= true
+        and is_valid_object(runtime:find_object(
+            SETTINGS_MAIN_ACTIVE_PAGE_CHANGED))
+    then
+        if runtime:register_hook(SETTINGS_MAIN_ACTIVE_PAGE_CHANGED,
+            function(context)
+                local main = runtime:unwrap(context)
+                runtime:delay_game_thread(0, function()
+                    finalize_native_mod_settings_page(runtime, main)
+                end)
+                return nil
+            end)
+        then
+            game_settings_state.active_page_changed_hook_registered = true
+        end
+    end
+
+    if game_settings_state.page_activated_hook_registered ~= true
+        and is_valid_object(runtime:find_object(MOD_SETTINGS_PAGE_ACTIVATED))
+    then
+        if runtime:register_hook(MOD_SETTINGS_PAGE_ACTIVATED, function(context)
             local page = runtime:unwrap(context)
             runtime:delay_game_thread(0, function()
-                inject_game_settings(runtime, page)
+                activate_native_mod_settings_page(runtime, page)
+                diagnose_page_bindings(runtime, page)
+                for _, main in pairs(game_settings_state.observed_mains) do
+                    local switcher = runtime:unwrap(runtime:try(function()
+                        return main.WidgetSwitcher_Pages
+                    end))
+                    if object_identity(find_mod_settings_page(runtime,
+                        switcher)) == object_identity(page)
+                    then
+                        diagnose_native_settings_navigation(runtime, main,
+                            switcher, "page-activated")
+                    end
+                end
                 ensure_game_settings_hooks(runtime)
             end)
             return nil
@@ -920,16 +1665,10 @@ local function ensure_game_settings_hooks(runtime)
         and is_valid_object(runtime:find_object(SETTINGS_PAGE_REINITIALIZE))
     then
         if runtime:register_hook(SETTINGS_PAGE_REINITIALIZE,
+            noop,
             function(context)
                 local page = runtime:unwrap(context)
-                if is_game_settings_page(page) then
-                    inject_game_settings(runtime, page)
-                end
-                return nil
-            end,
-            function(context)
-                local page = runtime:unwrap(context)
-                if is_game_settings_page(page) then
+                if is_mod_settings_page(page) then
                     runtime:delay_game_thread(0, function()
                         inject_game_settings(runtime, page)
                     end)
@@ -1012,19 +1751,35 @@ local function ensure_game_settings_hooks(runtime)
 end
 
 local function ensure_game_settings_notifications(runtime)
-    if game_settings_state.notify_registered == true then return true end
     if type(NotifyOnNewObject) ~= "function" then return false end
 
-    local ok = pcall(function()
-        NotifyOnNewObject(GAME_SETTINGS_PAGE_CLASS, function(_page)
-            ensure_game_settings_hooks(runtime)
-            runtime:delay_game_thread(0, function()
-                ensure_game_settings_hooks(runtime)
+    if game_settings_state.page_notify_registered ~= true then
+        game_settings_state.page_notify_registered = pcall(function()
+            NotifyOnNewObject(MOD_SETTINGS_PAGE_CLASS, function(page)
+                -- This callback may observe a CDO, archetype, or live page.
+                -- Only write the reflected bool bit; do not inspect the
+                -- object, call widget functions, or assign FText here.
+                page = runtime:unwrap(page)
+                pcall(function() page.bIsEnabled = true end)
             end)
         end)
-    end)
-    game_settings_state.notify_registered = ok
-    return ok
+    end
+    if game_settings_state.main_notify_registered ~= true then
+        game_settings_state.main_notify_registered = pcall(function()
+            NotifyOnNewObject(MOD_SETTINGS_MAIN_CLASS, function(main)
+                main = runtime:unwrap(main)
+                local main_key = object_identity(main)
+                if main_key ~= "" then
+                    game_settings_state.observed_mains[main_key] = main
+                end
+                ensure_game_settings_hooks(runtime)
+                -- CreatePageButtons is called after this notification and is
+                -- the definitive ready signal for this instance.
+            end)
+        end)
+    end
+    return game_settings_state.page_notify_registered == true
+        and game_settings_state.main_notify_registered == true
 end
 
 local function register_game_bool_setting(runtime, options)
@@ -1044,6 +1799,7 @@ local function register_game_bool_setting(runtime, options)
     entry = {
         id = id,
         runtime = runtime,
+        section = trim(options.section or options.group or runtime.mod_name),
         default = options.default == true,
         get = options.get,
         set = options.set,
@@ -1054,11 +1810,10 @@ local function register_game_bool_setting(runtime, options)
 
     ensure_game_settings_notifications(runtime)
     ensure_game_settings_hooks(runtime)
-    for _, page in ipairs(runtime:find_all_of("W_SettingsPage_Game_C")) do
-        local target_page = page
+    for _, main in ipairs(runtime:find_all_of("W_SettingsMain_C")) do
+        local target_main = main
         runtime:delay_game_thread(0, function()
-            inject_game_settings(runtime, target_page)
-            ensure_game_settings_hooks(runtime)
+            finalize_native_mod_settings_page(runtime, target_main)
         end)
     end
 
