@@ -101,8 +101,8 @@ The preferred API is the per-mod runtime instance (`pleasureLib:*`). Static
 helpers on `_G.PleasureLib` exist for compatibility, but the runtime keeps the
 log prefix and object cache scoped to your mod.
 
-See `API.md` in the repository/archive for the full API documentation and loader
-pattern.
+See the [PleasureLib Wiki](https://github.com/89pleasure/G1R-PleasureLib/wiki)
+for installation, the recommended loader, API documentation, and recipes.
 
 For a localized native boolean option, use
 `runtime:register_game_bool_setting(options)`. It supports getter/setter

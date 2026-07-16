@@ -16,4 +16,6 @@ PleasureLib : 1
 Dependent mods should still include their own fallback loader so players do not
 need to edit mods.txt manually.
 
-For mod authors, see API.md in the repository or Nexus page files.
+For mod authors, see the canonical documentation at:
+
+https://github.com/89pleasure/G1R-PleasureLib/wiki
