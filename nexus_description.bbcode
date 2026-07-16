@@ -12,6 +12,7 @@ PleasureLib currently provides generic helpers for:
 [*]Mod-prefixed logging
 [*]Safe pcall wrappers
 [*]Simple INI parsing
+[*]Targeted INI value updates without discarding comments or unrelated options
 [*]Boolean and list parsing
 [*]Text file read/write helpers
 [*]Defensive UE object validation
@@ -21,7 +22,10 @@ PleasureLib currently provides generic helpers for:
 [*]Delayed callbacks and game-thread callbacks
 [*]Defensive hook registration
 [*]Focused runtime capture of newly created UE objects
+[*]Localized native ON/OFF settings under Settings -> Game -> Mods
 [/list]
+
+The native settings API creates the game's own settings row and boolean widget, prevents duplicate entries across menu recreation, and can persist changes to a mod INI. This gives dependent mods a shared way to expose settings without shipping a custom menu.
 
 The library intentionally avoids mod-specific gameplay behavior. It is meant to stay small, boring, and reusable.
 
@@ -90,6 +94,8 @@ The preferred API is the per-mod runtime instance (pleasureLib:*). Static helper
 
 See API.md in the repository or archive for the full API documentation and loader pattern.
 
+For a localized native boolean option, use runtime:register_game_bool_setting(options). It supports getter/setter callbacks, localized names and descriptions, an optional default, and optional INI persistence.
+
 [size=4][b]Compatibility[/b][/size]
 
 PleasureLib is plain Lua for UE4SS. It does not overwrite game assets and does not patch gameplay by itself.
@@ -104,9 +110,8 @@ Do not remove it while installed mods still list it as a requirement.
 
 [size=4][b]Current Version[/b][/size]
 
-0.2.0
+0.3.31
 
 [size=4][b]Credits[/b][/size]
 
 Created by Lenna for Gothic 1 Remake UE4SS mods.
-
