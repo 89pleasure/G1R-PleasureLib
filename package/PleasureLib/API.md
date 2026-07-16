@@ -4,7 +4,7 @@ PleasureLib is a small UE4SS Lua helper library for Gothic 1 Remake mods. It is
 intended to centralize generic, defensive helper code that multiple mods can
 share without depending on one specific mod's behavior.
 
-Current version: `0.2.0`
+Current version: `0.3.31`
 
 ## Recommended Usage
 
@@ -150,6 +150,77 @@ Reads an entire text file. Returns the content string or `nil`.
 
 Writes text content to a file. Returns `true` on success and `false` on failure.
 
+#### `runtime:update_ini_value(path, key, value)`
+
+Updates the first matching `key=value` line in an existing INI file without
+discarding its other lines or comments. The key comparison is case-insensitive.
+If the key does not exist, it is appended. Returns `true` on success.
+
+### Native Game Settings
+
+#### `runtime:register_game_bool_setting(options)`
+
+Registers a native ON/OFF row under `Settings -> Game -> Mods`. PleasureLib
+creates and connects the game's own settings row and boolean widget, so mouse,
+keyboard, controller focus, and the settings detail panel use the vanilla UI.
+
+Required options:
+
+- `id`: globally unique, stable setting identifier. Prefix it with the mod name.
+- `get()`: returns the current boolean value.
+- `set(value)`: applies the new value. Return `false` to reject the change.
+
+Optional options:
+
+- `default`: fallback boolean when `get()` does not return a value.
+- `persist.path`: INI path or callback returning the path.
+- `persist.key`: INI key or callback returning the key.
+- `translations`: localized display names and descriptions by language code.
+
+Translation lookup first tries the complete current language code, then its base
+language, then `en`. Gothic 1 Remake language codes such as `de`, `fr`, `it`,
+`es`, `pl`, `ru`, `zh-hans`, `ja`, and `pt-br` can be supplied. The `Mods`
+section heading is localized by PleasureLib.
+
+Example:
+
+```lua
+pleasureLib:register_game_bool_setting({
+    id = "MyMod.ShowExtraInfo",
+    default = false,
+    get = function()
+        return config.ShowExtraInfo == true
+    end,
+    set = function(value)
+        config.ShowExtraInfo = value == true
+        return true
+    end,
+    persist = {
+        path = function() return config_path end,
+        key = "ShowExtraInfo",
+    },
+    translations = {
+        en = {
+            name = "Show extra information",
+            description = "Shows additional information in the inventory.",
+        },
+        de = {
+            name = "Zusätzliche Informationen anzeigen",
+            description = "Zeigt zusätzliche Informationen im Inventar an.",
+        },
+    },
+})
+```
+
+The returned handle contains the setting `id` and a `refresh()` function. Call
+`refresh()` if the mod changes the value outside the settings menu and the
+visible native widget should be synchronized.
+
+Registration is safe before the settings assets are loaded. PleasureLib waits
+for the Game settings page and prevents duplicate rows when the page is opened
+again. INI persistence occurs when the native toggle reports its change, with a
+lifecycle commit when the settings page applies or discards its pending values.
+
 ### Unreal And UE4SS Helpers
 
 #### `runtime:unwrap(value)`
@@ -238,9 +309,11 @@ game-thread helper exists.
 
 Returns `true` when scheduled, otherwise `false`.
 
-#### `runtime:register_hook(path, handler)`
+#### `runtime:register_hook(path, handler[, post_handler])`
 
 Registers a UE4SS hook through `RegisterHook`. Logs a readable error on failure.
+The optional third argument is forwarded as UE4SS's post-handler, which is
+required for a true post-hook on native `/Script/` functions.
 Returns `true` on success and `false` on failure.
 
 ## Static Exports
@@ -259,4 +332,3 @@ PleasureLib is idempotent. If the same version has already been loaded, loading
 Each call to `PleasureLib.new(...)` creates a fresh per-mod runtime with its own
 log prefix, debug flag, and object cache. This makes reload behavior predictable
 for consuming mods.
-

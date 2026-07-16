@@ -4,8 +4,9 @@ Shared UE4SS Lua helpers for Lenna's Gothic 1 Remake mods.
 
 This is a small dependency-style mod intended to reduce repeated defensive Lua
 code across mods. It deliberately contains only generic helpers: logging,
-`pcall` wrappers, INI parsing, UE object validation, `StaticFindObject` fallback
-lookup, delayed callbacks, and hook registration.
+`pcall` wrappers, INI parsing and updates, UE object validation,
+`StaticFindObject` fallback lookup, delayed callbacks, hook registration, and
+native mod settings under the game's Game settings page.
 
 ## Documentation
 
@@ -42,6 +43,9 @@ returns only matching objects that appear during a short sampling window.
 Options include `filter`, `key`, `sample_delays_ms`, and `finish_delay_ms`; the
 returned handle provides `cancel()`. This supports focused runtime tracing
 without dumping all loaded objects.
+
+`runtime:register_game_bool_setting(options)` adds a localized native ON/OFF row
+under `Settings -> Game -> Mods` and can persist changes directly to a mod INI.
 
 Example loader:
 
