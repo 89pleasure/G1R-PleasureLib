@@ -1,4 +1,4 @@
-local VERSION = "0.4.64"
+local VERSION = "0.4.65"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -1495,46 +1495,24 @@ local function ensure_game_settings_hooks(runtime)
                 -- construction, the bound WidgetSwitcher_Pages property is
                 -- not guaranteed to be initialized before this call.
                 local switcher = runtime:unwrap(pages_switcher)
-                local page_count = switcher_widget_count(runtime, switcher)
-                    or 0
                 local page = find_mod_settings_page(runtime, switcher)
-                local raw_before = is_valid_object(page)
-                    and runtime:try(function()
-                        return page.bIsEnabled
-                    end) == true
-                local enabled_before = is_valid_object(page)
-                    and runtime:try(function()
-                        return page:GetIsEnabled()
-                    end) == true
                 -- CreatePageButtons skips every SettingsPageWidget for which
                 -- UWidget::GetIsEnabled() returns false. Enabling the dormant
                 -- Test page here lets Gothic create and bind its native button.
-                local enabled_after, raw_after, getter_after =
-                    enable_mod_settings_page(runtime, page)
+                enable_mod_settings_page(runtime, page)
                 local main_key = object_identity(main)
                 local button_base = tonumber(runtime:try(function()
                     return #main.m_PageButtons
                 end)) or 0
-                local _, target_ordinal, expected_buttons =
+                local _, _, expected_buttons =
                     settings_page_button_for(runtime, main, switcher, page,
                         button_base, false)
                 if main_key ~= "" then
                     game_settings_state.create_page_button_batches[main_key] = {
                         button_base = button_base,
-                        target_ordinal = target_ordinal,
                         expected_buttons = expected_buttons,
                     }
                 end
-                runtime:log("CreatePageButtons pre pages="
-                    .. tostring(page_count)
-                    .. " modPage=" .. tostring(is_valid_object(page))
-                    .. " rawBefore=" .. tostring(raw_before)
-                    .. " enabledBefore=" .. tostring(enabled_before)
-                    .. " rawAfter=" .. tostring(raw_after)
-                    .. " getterAfter=" .. tostring(getter_after)
-                    .. " enabledAfter=" .. tostring(enabled_after)
-                    .. " targetOrdinal=" .. tostring(target_ordinal)
-                    .. " expectedButtons=" .. tostring(expected_buttons))
                 return nil
             end,
             function(context, pages_switcher)
@@ -1556,11 +1534,6 @@ local function ensure_game_settings_hooks(runtime)
                 local expected_buttons = batch and batch.expected_buttons or 0
                 game_settings_state.create_page_button_batches[main_key] = nil
                 local added_buttons = button_count - button_base
-                runtime:log("CreatePageButtons post base="
-                    .. tostring(button_base)
-                    .. " nativeButtons=" .. tostring(button_count)
-                    .. " added=" .. tostring(added_buttons)
-                    .. " expected=" .. tostring(expected_buttons))
                 -- The switcher can contain native pages that Gothic includes
                 -- independently of their reflected bIsEnabled value. Require
                 -- at least the complete raw-enabled batch: this accepts the
