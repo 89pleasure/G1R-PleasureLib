@@ -1,4 +1,4 @@
-local VERSION = "0.4.61"
+local VERSION = "0.4.62"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -280,40 +280,24 @@ local function set_object_property(object, property_name, value)
 end
 
 local function set_widget_visibility(runtime, widget, visibility)
-    if not is_valid_object(widget) then
-        return false, false, false, nil, nil, "invalid widget"
-    end
-
-    local before = runtime:unwrap(runtime:try(function()
-        return widget.Visibility
-    end))
+    if not is_valid_object(widget) then return false end
     local property_ok = set_object_property(widget, "Visibility", visibility)
 
     -- In some cold-start runs UE4SS resolves the concrete Blueprint row but
     -- not inherited UWidget methods through UObject.__index. Invoke the native
     -- reflected UFunction explicitly so the live Slate widget is updated too.
-    local reflected_ok = false
-    local reflected_result = nil
     local set_visibility_function = runtime:find_object(WIDGET_SET_VISIBILITY)
     if is_valid_object(set_visibility_function) then
-        reflected_ok, reflected_result = pcall(function()
+        local reflected_ok = pcall(function()
             return set_visibility_function(widget, visibility)
         end)
+        if reflected_ok then return true end
     end
 
-    local member_ok = false
-    local member_result = nil
-    if not reflected_ok then
-        member_ok, member_result = pcall(function()
-            return widget:SetVisibility(visibility)
-        end)
-    end
-
-    local after = runtime:unwrap(runtime:try(function()
-        return widget.Visibility
-    end))
-    return property_ok, reflected_ok, member_ok, before, after,
-        reflected_ok and reflected_result or member_result
+    local member_ok = pcall(function()
+        return widget:SetVisibility(visibility)
+    end)
+    return member_ok or property_ok
 end
 
 local function set_bool_property(object, property_name, value)
@@ -1079,19 +1063,7 @@ local function initialize_mod_settings_page(runtime, page, page_state, panel)
     end
     page_state.native_test_rows = {}
     for _, child in ipairs(native_test_rows) do
-        local property_ok, reflected_ok, member_ok, before, after, result =
-            set_widget_visibility(runtime, child, WIDGET_VISIBILITY_COLLAPSED)
-        local setting = runtime:unwrap(runtime:try(function()
-            return child.m_Setting
-        end))
-        runtime:log("Mods native test row collapse"
-            .. " setting=" .. object_full_name(setting)
-            .. " property=" .. tostring(property_ok)
-            .. " reflected=" .. tostring(reflected_ok)
-            .. " memberFallback=" .. tostring(member_ok)
-            .. " before=" .. safe_to_string(before)
-            .. " after=" .. safe_to_string(after)
-            .. " result=" .. safe_to_string(runtime:unwrap(result)))
+        set_widget_visibility(runtime, child, WIDGET_VISIBILITY_COLLAPSED)
         table.insert(page_state.native_test_rows, child)
     end
 
