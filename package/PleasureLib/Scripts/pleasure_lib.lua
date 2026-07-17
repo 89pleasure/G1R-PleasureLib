@@ -1,4 +1,4 @@
-local VERSION = "0.4.43"
+local VERSION = "0.4.58"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -208,6 +208,7 @@ local GAME_SETTINGS_BOOL_OBJECT_CLASS = "/Script/G1R.SettingObject_Bool_Test"
 local BOOL_WIDGET_SET_VALUE = "/Script/G1R.SettingObjectWidget_Bool:SetValue"
 local BOOL_SETTING_SET_VALUE = "/Script/G1R.SettingObject_Bool:SetValue"
 local WIDGET_BLUEPRINT_LIBRARY = "/Script/UMG.Default__WidgetBlueprintLibrary"
+local WIDGET_SET_VISIBILITY = "/Script/UMG.Widget:SetVisibility"
 local INTERNATIONALIZATION_LIBRARY =
     "/Script/Engine.Default__KismetInternationalizationLibrary"
 local WIDGET_VISIBILITY_COLLAPSED = 1
@@ -244,6 +245,7 @@ local game_settings_state = {
     observed_mains = {},
     native_pages_by_main = {},
     create_page_button_batches = {},
+    lifecycle_sequence = 0,
     bindings_by_widget = {},
     bindings_by_setting = {},
 }
@@ -276,6 +278,43 @@ local function set_object_property(object, property_name, value)
         return true
     end)
     return fallback_ok and result == true
+end
+
+local function set_widget_visibility(runtime, widget, visibility)
+    if not is_valid_object(widget) then
+        return false, false, false, nil, nil, "invalid widget"
+    end
+
+    local before = runtime:unwrap(runtime:try(function()
+        return widget.Visibility
+    end))
+    local property_ok = set_object_property(widget, "Visibility", visibility)
+
+    -- In some cold-start runs UE4SS resolves the concrete Blueprint row but
+    -- not inherited UWidget methods through UObject.__index. Invoke the native
+    -- reflected UFunction explicitly so the live Slate widget is updated too.
+    local reflected_ok = false
+    local reflected_result = nil
+    local set_visibility_function = runtime:find_object(WIDGET_SET_VISIBILITY)
+    if is_valid_object(set_visibility_function) then
+        reflected_ok, reflected_result = pcall(function()
+            return set_visibility_function(widget, visibility)
+        end)
+    end
+
+    local member_ok = false
+    local member_result = nil
+    if not reflected_ok then
+        member_ok, member_result = pcall(function()
+            return widget:SetVisibility(visibility)
+        end)
+    end
+
+    local after = runtime:unwrap(runtime:try(function()
+        return widget.Visibility
+    end))
+    return property_ok, reflected_ok, member_ok, before, after,
+        reflected_ok and reflected_result or member_result
 end
 
 local function set_bool_property(object, property_name, value)
@@ -452,6 +491,22 @@ local function append_settings_row(page, row)
     end)
 end
 
+local function settings_row_registered(page, row)
+    local rows = try(function() return page.m_SettingsRowWidgets end)
+    if rows == nil then return nil end
+    for index = 1, #rows do
+        local existing = unwrap(try(function() return rows[index] end))
+        if object_identity(existing) == object_identity(row) then return true end
+    end
+    return false
+end
+
+local function panel_child_count(runtime, panel)
+    return tonumber(runtime:unwrap(runtime:try(function()
+        return panel:GetChildrenCount()
+    end)))
+end
+
 local function update_setting_description(runtime, setting, entry)
     local name = localized_value(runtime, entry.translations, "name", entry.id)
     local description = localized_value(runtime, entry.translations,
@@ -521,6 +576,10 @@ local function ensure_mod_header(runtime, page, page_state, panel, section)
     page_state.headers = page_state.headers or {}
     local header = page_state.headers[section]
     if is_valid_object(header) then
+        -- Some UE4SS runs expose the live panel object while inherited UPanel
+        -- functions temporarily return nil. The existing header is still
+        -- valid and visible; treating nil as "detached" would add it again.
+        if panel_child_count(runtime, panel) == nil then return header end
         local parent = runtime:unwrap(runtime:try(function()
             return header:GetParent()
         end))
@@ -664,19 +723,103 @@ local function index_binding(binding)
     end
 end
 
-local function ensure_binding_attached(runtime, binding, panel)
-    if not is_valid_object(binding.row) or not is_valid_object(binding.setting) then
+local function retain_registered_binding(runtime, binding)
+    if settings_row_registered(binding.page, binding.row) ~= true then
         return false
+    end
+    local row_setting = runtime:unwrap(runtime:try(function()
+        return binding.row.m_Setting
+    end))
+    if object_identity(row_setting) ~= object_identity(binding.setting) then
+        return false
+    end
+
+    local current_widget = runtime:unwrap(runtime:try(function()
+        return binding.row.m_SettingWidget
+    end))
+    local linked_widget = nil
+    if is_valid_object(current_widget) then
+        local current_setting = runtime:unwrap(runtime:try(function()
+            return current_widget.m_Setting
+        end))
+        local current_generic_setting = runtime:unwrap(runtime:try(function()
+            return current_widget.m_GenericSetting
+        end))
+        if object_identity(current_widget) == object_identity(binding.widget)
+            or object_identity(current_setting) == object_identity(binding.setting)
+            or object_identity(current_generic_setting)
+                == object_identity(binding.setting)
+        then
+            linked_widget = current_widget
+        end
+    end
+    if not is_valid_object(linked_widget) and is_valid_object(binding.widget) then
+        local widget_setting = runtime:unwrap(runtime:try(function()
+            return binding.widget.m_Setting
+        end))
+        local generic_setting = runtime:unwrap(runtime:try(function()
+            return binding.widget.m_GenericSetting
+        end))
+        if object_identity(widget_setting) == object_identity(binding.setting)
+            or object_identity(generic_setting) == object_identity(binding.setting)
+        then
+            linked_widget = binding.widget
+        end
+    end
+    if not is_valid_object(linked_widget) then return false end
+
+    if object_identity(linked_widget) ~= object_identity(binding.widget) then
+        link_bool_setting_widget(runtime, binding.row, linked_widget,
+            binding.setting)
+        unindex_binding(binding)
+        binding.widget = linked_widget
+        index_binding(binding)
+    end
+    return true
+end
+
+local function ensure_binding_attached(runtime, binding, panel)
+    runtime:log("Mods binding attach begin id="
+        .. tostring(binding.entry and binding.entry.id)
+        .. " rowValid=" .. tostring(is_valid_object(binding.row))
+        .. " settingValid=" .. tostring(is_valid_object(binding.setting))
+        .. " widgetValid=" .. tostring(is_valid_object(binding.widget))
+        .. " row=" .. object_full_name(binding.row)
+        .. " setting=" .. object_full_name(binding.setting))
+    if not is_valid_object(binding.row) or not is_valid_object(binding.setting) then
+        runtime:log("Mods binding attach rejected invalid row or setting")
+        return false
+    end
+
+    -- In the broken UMG reflection state, GetParent/GetContent and all panel
+    -- child queries return nil although the row remains valid and registered.
+    -- Keep that authoritative native binding instead of removing it and
+    -- appending a duplicate on every page activation.
+    local child_count = panel_child_count(runtime, panel)
+    if child_count == nil and retain_registered_binding(runtime, binding) then
+        runtime:log("Mods binding retained from native row registry id="
+            .. tostring(binding.entry and binding.entry.id))
+        return is_valid_object(binding.widget)
+    elseif child_count == nil then
+        runtime:log("Mods binding attachment deferred id="
+            .. tostring(binding.entry and binding.entry.id))
+        return nil
     end
 
     local parent = runtime:unwrap(runtime:try(function()
         return binding.row:GetParent()
     end))
+    runtime:log("Mods binding attach parent=" .. object_full_name(parent)
+        .. " panel=" .. object_full_name(panel)
+        .. " match=" .. tostring(object_identity(parent)
+            == object_identity(panel)))
     if object_identity(parent) ~= object_identity(panel) then
         runtime:try(function() binding.row:RemoveFromParent() end)
         local added = runtime:try(function()
             return panel:AddChildToVerticalBox(binding.row)
         end)
+        runtime:log("Mods binding attach addResult="
+            .. safe_to_string(runtime:unwrap(added)))
         if added == nil then return false end
     end
 
@@ -686,6 +829,9 @@ local function ensure_binding_attached(runtime, binding, panel)
     local content = runtime:unwrap(runtime:try(function()
         return container:GetContent()
     end))
+    runtime:log("Mods binding attach content=" .. object_full_name(content)
+        .. " expectedWidget=" .. object_full_name(binding.widget)
+        .. " contentValid=" .. tostring(is_valid_object(content)))
     if is_valid_object(content)
         and object_identity(content) ~= object_identity(binding.widget)
     then
@@ -708,6 +854,7 @@ local function ensure_binding_attached(runtime, binding, panel)
             return container:GetContent()
         end))
         if object_identity(content) ~= object_identity(binding.widget) then
+            if retain_registered_binding(runtime, binding) then return true end
             return false
         end
     end
@@ -719,23 +866,41 @@ local function ensure_binding_attached(runtime, binding, panel)
         runtime:debug_log("game setting '" .. binding.entry.id
             .. "' row registry unavailable after reattach; keeping binding")
     end
+    runtime:log("Mods binding attach success id="
+        .. tostring(binding.entry and binding.entry.id))
     return true
 end
 
 local function inject_bool_setting(runtime, page, page_state, entry, panel)
     local existing_binding = page_state.bindings[entry.id]
+    runtime:log("Mods binding inject id=" .. tostring(entry.id)
+        .. " existing=" .. tostring(existing_binding ~= nil)
+        .. " nativeClaimed=" .. tostring(
+            page_state.native_bool_claimed == true)
+        .. " existingRowValid=" .. tostring(existing_binding ~= nil
+            and is_valid_object(existing_binding.row))
+        .. " existingSettingValid=" .. tostring(existing_binding ~= nil
+            and is_valid_object(existing_binding.setting)))
     if existing_binding ~= nil
         and is_valid_object(existing_binding.row)
         and is_valid_object(existing_binding.setting)
     then
         existing_binding.entry = entry
         existing_binding.page = page
-        if ensure_binding_attached(runtime, existing_binding, panel) then
+        local attached = ensure_binding_attached(runtime, existing_binding,
+            panel)
+        if attached == true then
             page_state.bindings[entry.id] = existing_binding
+            runtime:log("Mods binding reused id=" .. tostring(entry.id))
             return synchronize_binding(existing_binding)
+        elseif attached == nil then
+            return false
         end
     end
     if existing_binding ~= nil then
+        runtime:log("Mods binding discarded id=" .. tostring(entry.id)
+            .. " row=" .. object_full_name(existing_binding.row)
+            .. " setting=" .. object_full_name(existing_binding.setting))
         unindex_binding(existing_binding)
         runtime:try(function() existing_binding.row:RemoveFromParent() end)
         page_state.bindings[entry.id] = nil
@@ -743,6 +908,9 @@ local function inject_bool_setting(runtime, page, page_state, entry, panel)
 
     local use_native_row = page_state.native_bool_claimed ~= true
         and is_valid_object(page_state.native_bool_row)
+    runtime:log("Mods binding create id=" .. tostring(entry.id)
+        .. " useNativeRow=" .. tostring(use_native_row)
+        .. " nativeRow=" .. object_full_name(page_state.native_bool_row))
     local row = use_native_row and page_state.native_bool_row
         or create_user_widget(runtime, page, GAME_SETTINGS_ROW_CLASS)
     if not is_valid_object(row) then
@@ -823,6 +991,9 @@ local function inject_bool_setting(runtime, page, page_state, entry, panel)
     page_state.bindings[entry.id] = binding
     if use_native_row then page_state.native_bool_claimed = true end
     index_binding(binding)
+    runtime:log("Mods binding created id=" .. tostring(entry.id)
+        .. " row=" .. object_full_name(row)
+        .. " setting=" .. object_full_name(setting))
     return true
 end
 
@@ -844,9 +1015,8 @@ local function ensure_mod_section_order(runtime, page_state, panel)
     end
     if #section_widgets == 0 then return true end
 
-    local child_count = tonumber(runtime:unwrap(runtime:try(function()
-        return panel:GetChildrenCount()
-    end))) or 0
+    local child_count = panel_child_count(runtime, panel)
+    if child_count == nil then return true end
     local first_section_index = child_count - #section_widgets
     local correctly_ordered = first_section_index >= 0
     if correctly_ordered then
@@ -854,6 +1024,7 @@ local function ensure_mod_section_order(runtime, page_state, panel)
             local child = runtime:unwrap(runtime:try(function()
                 return panel:GetChildAt(first_section_index + offset - 1)
             end))
+            if not is_valid_object(child) then return true end
             if object_identity(child) ~= object_identity(widget) then
                 correctly_ordered = false
                 break
@@ -882,17 +1053,26 @@ local function initialize_mod_settings_page(runtime, page, page_state, panel)
 
     local rows = runtime:try(function() return page.m_SettingsRowWidgets end)
     local native_bool_row = nil
+    local native_test_rows = {}
     if rows ~= nil then
         for index = 1, #rows do
             local row = runtime:unwrap(runtime:try(function() return rows[index] end))
             local setting = runtime:unwrap(runtime:try(function()
                 return row.m_Setting
             end))
-            if object_full_name(setting):find(
+            local setting_name = object_full_name(setting)
+            if setting_name:find(
                 "SettingObject_Bool_Test", 1, true) ~= nil
             then
                 native_bool_row = row
-                break
+            elseif setting_name:find("SettingObject_Int_Test", 1, true)
+                    ~= nil
+                or setting_name:find("SettingObject_Float_Test", 1, true)
+                    ~= nil
+                or setting_name:find("SettingObject_Enum_Test", 1, true)
+                    ~= nil
+            then
+                table.insert(native_test_rows, row)
             end
         end
     end
@@ -919,25 +1099,42 @@ local function initialize_mod_settings_page(runtime, page, page_state, panel)
     -- Keep Gothic's fully initialized bool row and collapse the unrelated
     -- Enum/Float/Int test rows. Removing them is temporary because the page's
     -- native Reinitialize adds its registered rows back on activation.
-    local children = {}
-    local child_count = tonumber(runtime:unwrap(runtime:try(function()
-        return panel:GetChildrenCount()
-    end))) or 0
-    for index = 0, child_count - 1 do
-        local child = runtime:unwrap(runtime:try(function()
-            return panel:GetChildAt(index)
-        end))
-        if is_valid_object(child) then table.insert(children, child) end
+    if #native_test_rows == 0 then
+        local child_count = panel_child_count(runtime, panel) or 0
+        for index = 0, child_count - 1 do
+            local child = runtime:unwrap(runtime:try(function()
+                return panel:GetChildAt(index)
+            end))
+            local setting = runtime:unwrap(runtime:try(function()
+                return child.m_Setting
+            end))
+            local setting_name = object_full_name(setting)
+            if setting_name:find("SettingObject_Int_Test", 1, true) ~= nil
+                or setting_name:find("SettingObject_Float_Test", 1, true)
+                    ~= nil
+                or setting_name:find("SettingObject_Enum_Test", 1, true)
+                    ~= nil
+            then
+                table.insert(native_test_rows, child)
+            end
+        end
     end
     page_state.native_test_rows = {}
-    for _, child in ipairs(children) do
-        if object_identity(child) ~= object_identity(native_bool_row) then
-            set_object_property(child, "Visibility", WIDGET_VISIBILITY_COLLAPSED)
-            runtime:try(function()
-                child:SetVisibility(WIDGET_VISIBILITY_COLLAPSED)
-            end)
-            table.insert(page_state.native_test_rows, child)
-        end
+    for _, child in ipairs(native_test_rows) do
+        local property_ok, reflected_ok, member_ok, before, after, result =
+            set_widget_visibility(runtime, child, WIDGET_VISIBILITY_COLLAPSED)
+        local setting = runtime:unwrap(runtime:try(function()
+            return child.m_Setting
+        end))
+        runtime:log("Mods native test row collapse"
+            .. " setting=" .. object_full_name(setting)
+            .. " property=" .. tostring(property_ok)
+            .. " reflected=" .. tostring(reflected_ok)
+            .. " memberFallback=" .. tostring(member_ok)
+            .. " before=" .. safe_to_string(before)
+            .. " after=" .. safe_to_string(after)
+            .. " result=" .. safe_to_string(runtime:unwrap(result)))
+        table.insert(page_state.native_test_rows, child)
     end
 
     page_state.bindings = {}
@@ -951,10 +1148,7 @@ end
 local function collapse_native_test_rows(runtime, page_state)
     for _, row in ipairs(page_state.native_test_rows or {}) do
         if is_valid_object(row) then
-            set_object_property(row, "Visibility", WIDGET_VISIBILITY_COLLAPSED)
-            runtime:try(function()
-                row:SetVisibility(WIDGET_VISIBILITY_COLLAPSED)
-            end)
+            set_widget_visibility(runtime, row, WIDGET_VISIBILITY_COLLAPSED)
         end
     end
 end
@@ -1004,6 +1198,84 @@ local function diagnostic_value(runtime, fn)
     local value = runtime:unwrap(runtime:try(fn))
     if value == nil then return "nil" end
     return tostring(value)
+end
+
+local function diagnose_mod_page_lifecycle(runtime, page, event)
+    page = runtime:unwrap(page)
+    if not is_mod_settings_page(page) then return end
+
+    game_settings_state.lifecycle_sequence =
+        game_settings_state.lifecycle_sequence + 1
+    local sequence = game_settings_state.lifecycle_sequence
+    local panel = runtime:unwrap(runtime:try(function()
+        return page.VerticalBox_Content
+    end))
+    local panel_parent = runtime:unwrap(runtime:try(function()
+        return panel:GetParent()
+    end))
+    local raw_child_count = runtime:unwrap(runtime:try(function()
+        return panel:GetChildrenCount()
+    end))
+    local child_count = tonumber(raw_child_count) or 0
+    local scroll_box = runtime:unwrap(runtime:try(function()
+        return page.ScrollBox_Content
+    end))
+    local raw_scroll_child_count = runtime:unwrap(runtime:try(function()
+        return scroll_box:GetChildrenCount()
+    end))
+    local scroll_child_count = tonumber(raw_scroll_child_count) or 0
+    local scroll_child = runtime:unwrap(runtime:try(function()
+        return scroll_box:GetChildAt(0)
+    end))
+    local row_count = tonumber(runtime:try(function()
+        return #page.m_SettingsRowWidgets
+    end)) or 0
+    local page_state = game_settings_state.pages[object_identity(page)]
+    local parts = {}
+    for index = 0, child_count - 1 do
+        local child = runtime:unwrap(runtime:try(function()
+            return panel:GetChildAt(index)
+        end))
+        local setting = runtime:unwrap(runtime:try(function()
+            return child.m_Setting
+        end))
+        local child_class = object_full_name(child):match("^([^ ]+)")
+            or "<unknown>"
+        local setting_class = object_full_name(setting):match("^([^ ]+)")
+            or "<none>"
+        table.insert(parts, tostring(index)
+            .. ":" .. child_class
+            .. "/" .. setting_class
+            .. ":raw=" .. diagnostic_value(runtime, function()
+                return child.Visibility
+            end)
+            .. ":getter=" .. diagnostic_value(runtime, function()
+                return child:GetVisibility()
+            end))
+    end
+    runtime:log("Mods lifecycle seq=" .. tostring(sequence)
+        .. " event=" .. tostring(event)
+        .. " initialized=" .. tostring(
+            page_state ~= nil and page_state.initialized == true)
+        .. " page=" .. object_full_name(page)
+        .. " panel=" .. object_full_name(panel)
+        .. " panelParent=" .. object_full_name(panel_parent)
+        .. " panelCountRaw=" .. safe_to_string(raw_child_count)
+        .. " scroll=" .. object_full_name(scroll_box)
+        .. " scrollCountRaw=" .. safe_to_string(raw_scroll_child_count)
+        .. " scrollChild0=" .. object_full_name(scroll_child)
+        .. " registryRows=" .. tostring(row_count)
+        .. " panelChildren=" .. tostring(child_count)
+        .. " rows=[" .. table.concat(parts, " | ") .. "]")
+end
+
+local function schedule_mod_page_lifecycle_samples(runtime, page, event)
+    for _, delay_ms in ipairs({ 0, 50, 250 }) do
+        runtime:delay_game_thread(delay_ms, function()
+            diagnose_mod_page_lifecycle(runtime, page,
+                tostring(event) .. "+" .. tostring(delay_ms) .. "ms")
+        end)
+    end
 end
 
 local function diagnose_page_bindings(runtime, page)
@@ -1190,8 +1462,11 @@ local function enable_mod_settings_page(runtime, page)
 
     -- SetIsEnabled(true) is accepted by UE4SS for this widget but leaves the
     -- reflected bit false. CreatePageButtons reads this exact UWidget bit
-    -- (offset 0xD9, mask 0x04), so update and verify it directly.
+    -- (offset 0xD9, mask 0x04), so update it directly first. Calling the native
+    -- setter afterwards synchronizes the live UMG state without relying on an
+    -- unsafe construction-time object notification.
     local written = set_bool_property(page, "bIsEnabled", true)
+    runtime:try(function() page:SetIsEnabled(true) end)
     local raw_enabled = runtime:try(function()
         return page.bIsEnabled
     end) == true
@@ -1266,6 +1541,11 @@ local function finalize_native_mod_settings_page(runtime, main,
     local state = game_settings_state.native_pages_by_main[main_key]
     local button = state and runtime:unwrap(state.button) or nil
     local ordinal = state and state.ordinal or nil
+    -- A button can only be mapped to this page after CreatePageButtons has
+    -- produced the complete native batch. Positional lookup without that
+    -- confirmation maps ordinal 1 to the Game button when the dormant Test
+    -- page was skipped, which would rename Game to Mods.
+    if state == nil and button_base == nil then return page end
     -- SettingsMain can be reused. Gothic then clears the visible panel and
     -- appends a fresh native button batch while the previous button UObjects
     -- remain valid in m_PageButtons. An explicit batch base must therefore
@@ -1639,8 +1919,15 @@ local function ensure_game_settings_hooks(runtime)
     then
         if runtime:register_hook(MOD_SETTINGS_PAGE_ACTIVATED, function(context)
             local page = runtime:unwrap(context)
+            diagnose_mod_page_lifecycle(runtime, page, "activated-hook")
             runtime:delay_game_thread(0, function()
+                diagnose_mod_page_lifecycle(runtime, page,
+                    "activated-delayed-before")
                 activate_native_mod_settings_page(runtime, page)
+                diagnose_mod_page_lifecycle(runtime, page,
+                    "activated-delayed-after")
+                schedule_mod_page_lifecycle_samples(runtime, page,
+                    "activated-followup")
                 diagnose_page_bindings(runtime, page)
                 for _, main in pairs(game_settings_state.observed_mains) do
                     local switcher = runtime:unwrap(runtime:try(function()
@@ -1665,12 +1952,24 @@ local function ensure_game_settings_hooks(runtime)
         and is_valid_object(runtime:find_object(SETTINGS_PAGE_REINITIALIZE))
     then
         if runtime:register_hook(SETTINGS_PAGE_REINITIALIZE,
-            noop,
+            function(context)
+                diagnose_mod_page_lifecycle(runtime,
+                    runtime:unwrap(context), "reinitialize-pre")
+                return nil
+            end,
             function(context)
                 local page = runtime:unwrap(context)
                 if is_mod_settings_page(page) then
+                    diagnose_mod_page_lifecycle(runtime, page,
+                        "reinitialize-post")
                     runtime:delay_game_thread(0, function()
+                        diagnose_mod_page_lifecycle(runtime, page,
+                            "reinitialize-delayed-before")
                         inject_game_settings(runtime, page)
+                        diagnose_mod_page_lifecycle(runtime, page,
+                            "reinitialize-delayed-after")
+                        schedule_mod_page_lifecycle_samples(runtime, page,
+                            "reinitialize-followup")
                     end)
                 end
                 return nil
@@ -1756,11 +2055,22 @@ local function ensure_game_settings_notifications(runtime)
     if game_settings_state.page_notify_registered ~= true then
         game_settings_state.page_notify_registered = pcall(function()
             NotifyOnNewObject(MOD_SETTINGS_PAGE_CLASS, function(page)
-                -- This callback may observe a CDO, archetype, or live page.
-                -- Only write the reflected bool bit; do not inspect the
-                -- object, call widget functions, or assign FText here.
                 page = runtime:unwrap(page)
-                pcall(function() page.bIsEnabled = true end)
+                local full_name = object_full_name(page)
+                if full_name:find("Default__", 1, true) ~= nil then return end
+
+                -- Seed only the reflected gate read by CreatePageButtons. Do
+                -- not call widget functions or touch FText/content while the
+                -- instance is still being constructed.
+                local write_ok = pcall(function()
+                    page.bIsEnabled = true
+                end)
+                local raw_enabled = runtime:try(function()
+                    return page.bIsEnabled
+                end) == true
+                runtime:log("Mods page construction seed write="
+                    .. tostring(write_ok)
+                    .. " raw=" .. tostring(raw_enabled))
             end)
         end)
     end
