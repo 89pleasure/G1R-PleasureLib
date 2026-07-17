@@ -1,4 +1,4 @@
-local VERSION = "0.4.59"
+local VERSION = "0.4.60"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -1193,77 +1193,6 @@ local function inject_game_settings(runtime, page)
     return injected > 0
 end
 
-local function diagnostic_value(runtime, fn)
-    local value = runtime:unwrap(runtime:try(fn))
-    if value == nil then return "nil" end
-    return tostring(value)
-end
-
-local function diagnose_page_bindings(runtime, page)
-    local page_state = game_settings_state.pages[object_identity(page)]
-    if page_state == nil then return end
-
-    for id, binding in pairs(page_state.bindings) do
-        if binding.diagnostic_logged ~= true
-            and is_valid_object(binding.row)
-            and is_valid_object(binding.setting)
-            and is_valid_object(binding.widget)
-        then
-            local row_setting = runtime:unwrap(runtime:try(function()
-                return binding.row.m_Setting
-            end))
-            local row_widget = runtime:unwrap(runtime:try(function()
-                return binding.row.m_SettingWidget
-            end))
-            local widget_setting = runtime:unwrap(runtime:try(function()
-                return binding.widget.m_Setting
-            end))
-            local generic_setting = runtime:unwrap(runtime:try(function()
-                return binding.widget.m_GenericSetting
-            end))
-            local visible_widget = current_row_setting_widget(runtime,
-                binding.row)
-            runtime:log("Settings diagnostic id=" .. tostring(id)
-                .. " setting.available=" .. diagnostic_value(runtime,
-                    function() return binding.setting:IsAvailable() end)
-                .. " setting.supported=" .. diagnostic_value(runtime,
-                    function() return binding.setting:IsSupported() end)
-                .. " row.available=" .. diagnostic_value(runtime,
-                    function() return binding.row:IsAvailable() end)
-                .. " row.supported=" .. diagnostic_value(runtime,
-                    function() return binding.row:IsSupported() end)
-                .. " widget.available=" .. diagnostic_value(runtime,
-                    function() return binding.widget:IsAvailable() end)
-                .. " widget.supported=" .. diagnostic_value(runtime,
-                    function() return binding.widget:IsSupported() end)
-                .. " row.enabled=" .. diagnostic_value(runtime,
-                    function() return binding.row:GetIsEnabled() end)
-                .. " widget.enabled=" .. diagnostic_value(runtime,
-                    function() return binding.widget:GetIsEnabled() end)
-                .. " toggle.enabled=" .. diagnostic_value(runtime,
-                    function() return binding.widget.Button_Toggle:GetIsEnabled() end)
-                .. " platformMask=" .. diagnostic_value(runtime,
-                    function() return binding.setting.m_PlatformExclusivityMask end)
-                .. " inputMask=" .. diagnostic_value(runtime,
-                    function() return binding.setting.m_InputAvailabilityMask end)
-                .. " rowSettingMatch=" .. tostring(object_identity(row_setting)
-                    == object_identity(binding.setting))
-                .. " rowWidgetMatch=" .. tostring(object_identity(row_widget)
-                    == object_identity(binding.widget))
-                .. " visibleWidgetMatch=" .. tostring(
-                    object_identity(visible_widget)
-                    == object_identity(binding.widget))
-                .. " widgetSettingMatch=" .. tostring(
-                    object_identity(widget_setting)
-                    == object_identity(binding.setting))
-                .. " genericSettingMatch=" .. tostring(
-                    object_identity(generic_setting)
-                    == object_identity(binding.setting)))
-            binding.diagnostic_logged = true
-        end
-    end
-end
-
 local function switcher_widget_count(runtime, switcher)
     local count = tonumber(runtime:unwrap(runtime:try(function()
         return switcher:GetNumWidgets()
@@ -1842,7 +1771,6 @@ local function ensure_game_settings_hooks(runtime)
             local page = runtime:unwrap(context)
             runtime:delay_game_thread(0, function()
                 activate_native_mod_settings_page(runtime, page)
-                diagnose_page_bindings(runtime, page)
                 for _, main in pairs(game_settings_state.observed_mains) do
                     local switcher = runtime:unwrap(runtime:try(function()
                         return main.WidgetSwitcher_Pages
