@@ -1,4 +1,4 @@
-local VERSION = "0.4.63"
+local VERSION = "0.4.64"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -242,7 +242,6 @@ local game_settings_state = {
     bool_widget_value_hook_registered = false,
     bool_setting_value_hook_registered = false,
     bool_widget_changed_hook_registered = false,
-    observed_mains = {},
     native_pages_by_main = {},
     create_page_button_batches = {},
     bindings_by_widget = {},
@@ -1173,70 +1172,6 @@ local function find_mod_settings_page(runtime, switcher)
     return nil
 end
 
-local function diagnose_native_settings_navigation(runtime, main, switcher,
-    phase)
-    main = runtime:unwrap(main)
-    switcher = runtime:unwrap(switcher)
-    if not is_valid_object(main) then return end
-
-    local buttons = runtime:try(function() return main.m_PageButtons end)
-    local button_count = tonumber(runtime:try(function()
-        return buttons:GetArrayNum()
-    end)) or tonumber(runtime:try(function() return #buttons end)) or -1
-    local button_parts = {}
-    runtime:try(function()
-        buttons:ForEach(function(index, element)
-            local button = runtime:unwrap(element)
-            table.insert(button_parts, tostring(index) .. "="
-                .. (is_valid_object(button)
-                    and object_full_name(button) or "<null>"))
-        end)
-    end)
-
-    local panel = runtime:unwrap(runtime:try(function()
-        return main.VerticalBox_PageButtons
-    end))
-    local panel_count = tonumber(runtime:try(function()
-        return panel:GetChildrenCount()
-    end)) or -1
-    local panel_parts = {}
-    if panel_count > 0 then
-        for index = 0, panel_count - 1 do
-            local button = runtime:unwrap(runtime:try(function()
-                return panel:GetChildAt(index)
-            end))
-            table.insert(panel_parts, tostring(index) .. "="
-                .. (is_valid_object(button)
-                    and object_full_name(button) or "<null>"))
-        end
-    end
-
-    local page_count = is_valid_object(switcher)
-        and (switcher_widget_count(runtime, switcher) or 0) or 0
-    local page_parts = {}
-    for index = 0, page_count - 1 do
-        local page = switcher_widget_at(runtime, switcher, index)
-        local raw_enabled = runtime:try(function()
-            return page.bIsEnabled
-        end) == true
-        local getter_enabled = runtime:try(function()
-            return page:GetIsEnabled()
-        end) == true
-        table.insert(page_parts, tostring(index) .. "="
-            .. (is_valid_object(page) and object_full_name(page) or "<null>")
-            .. ":raw=" .. tostring(raw_enabled)
-            .. ":getter=" .. tostring(getter_enabled))
-    end
-
-    runtime:log("Native settings navigation phase=" .. tostring(phase)
-        .. " arrayNum=" .. tostring(button_count)
-        .. " array=[" .. table.concat(button_parts, " | ") .. "]"
-        .. " panelChildren=" .. tostring(panel_count)
-        .. " panel=[" .. table.concat(panel_parts, " | ") .. "]"
-        .. " pages=" .. tostring(page_count)
-        .. " switcher=[" .. table.concat(page_parts, " | ") .. "]")
-end
-
 local function enable_mod_settings_page(runtime, page)
     page = runtime:unwrap(page)
     if not is_mod_settings_page(page) then return false end
@@ -1611,9 +1546,6 @@ local function ensure_game_settings_hooks(runtime)
                 end
 
                 local main_key = object_identity(main)
-                if main_key ~= "" then
-                    game_settings_state.observed_mains[main_key] = main
-                end
                 local switcher = runtime:unwrap(pages_switcher)
                 local button_count = tonumber(runtime:try(function()
                     return #main.m_PageButtons
@@ -1629,8 +1561,6 @@ local function ensure_game_settings_hooks(runtime)
                     .. " nativeButtons=" .. tostring(button_count)
                     .. " added=" .. tostring(added_buttons)
                     .. " expected=" .. tostring(expected_buttons))
-                diagnose_native_settings_navigation(runtime, main, switcher,
-                    "create-post")
                 -- The switcher can contain native pages that Gothic includes
                 -- independently of their reflected bIsEnabled value. Require
                 -- at least the complete raw-enabled batch: this accepts the
@@ -1702,17 +1632,6 @@ local function ensure_game_settings_hooks(runtime)
             local page = runtime:unwrap(context)
             runtime:delay_game_thread(0, function()
                 activate_native_mod_settings_page(runtime, page)
-                for _, main in pairs(game_settings_state.observed_mains) do
-                    local switcher = runtime:unwrap(runtime:try(function()
-                        return main.WidgetSwitcher_Pages
-                    end))
-                    if object_identity(find_mod_settings_page(runtime,
-                        switcher)) == object_identity(page)
-                    then
-                        diagnose_native_settings_navigation(runtime, main,
-                            switcher, "page-activated")
-                    end
-                end
                 ensure_game_settings_hooks(runtime)
             end)
             return nil
@@ -1831,12 +1750,7 @@ local function ensure_game_settings_notifications(runtime)
     end
     if game_settings_state.main_notify_registered ~= true then
         game_settings_state.main_notify_registered = pcall(function()
-            NotifyOnNewObject(MOD_SETTINGS_MAIN_CLASS, function(main)
-                main = runtime:unwrap(main)
-                local main_key = object_identity(main)
-                if main_key ~= "" then
-                    game_settings_state.observed_mains[main_key] = main
-                end
+            NotifyOnNewObject(MOD_SETTINGS_MAIN_CLASS, function()
                 ensure_game_settings_hooks(runtime)
                 -- CreatePageButtons is called after this notification and is
                 -- the definitive ready signal for this instance.
