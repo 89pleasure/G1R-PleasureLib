@@ -2,6 +2,8 @@ PleasureLib
 
 Shared UE4SS Lua helpers for Lenna's Gothic 1 Remake mods.
 
+Version 0.4.67
+
 Includes an API for localized native ON/OFF settings under
 Settings -> Mods.
 

@@ -50,8 +50,11 @@ guide for the complete setup.
 
 ## Current Status
 
-Prototype. Keep the API small until at least two mods use the same helper
-without needing mod-specific behavior.
+Stable. Current version: `0.4.67`.
+
+PleasureLib is used by multiple released mods, including Extended Item
+Tooltips, QuickBites, and Let Snaf Cook. The public API remains deliberately
+small and generic so consuming mods do not inherit mod-specific behavior.
 
 ## Nexus Assets
 

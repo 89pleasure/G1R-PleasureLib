@@ -129,7 +129,7 @@ Do not remove it while installed mods still list it as a requirement.
 
 ## Current Version
 
-`0.4.0`
+`0.4.67`
 
 ## Credits
 

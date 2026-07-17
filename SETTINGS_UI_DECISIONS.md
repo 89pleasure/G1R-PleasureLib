@@ -249,3 +249,68 @@ PleasureLib bindings, and collapsed every remaining registered row. The four
 native Test entries were immediately visible on both of two complete game
 starts. Reject this registry-rescan approach and do not repeat it; the complete
 Lua implementation was restored byte-for-byte to `0.4.43`.
+
+## Resolved lifecycle race and current baseline
+
+This section supersedes the earlier instructions to keep `0.4.43` as the
+known-good baseline. Those instructions remain above as historical context for
+the investigation.
+
+Diagnostics in versions `0.4.47` through `0.4.49` identified the actual
+nondeterministic state. In affected cold starts, the live Test page and its
+five registered rows remained valid and readable through
+`m_SettingsRowWidgets`, while inherited UMG calls such as `GetParent()`,
+`GetContent()`, `GetChildrenCount()`, and `GetChildAt()` returned `nil`.
+PleasureLib treated those unavailable structural reads as proof that the
+custom Bool row had been detached, discarded its still-valid binding, and
+created another row on every activation. This caused both the duplicates and
+the apparent timing dependency.
+
+The stable implementation is based on the following rules:
+
+- `NotifyOnNewObject(W_SettingsPage_Test_C)` excludes `Default__` objects and
+  writes only the live page's raw `bIsEnabled` bit. It must not call widget
+  functions, touch `FText`, or inject content during construction.
+- Blueprint-only `W_SettingsMain:Construct` and `PreConstruct` hooks execute
+  after their Blueprint body in this UE4SS build. They are too late to seed the
+  page before the `CreatePageButtons` call inside that body and must not be
+  treated as native pre-hooks.
+- The `CreatePageButtons` pre-hook uses its supplied switcher parameter and
+  enables the Test page before Gothic builds the native button batch.
+- The pre-hook calculates the target ordinal without indexing the still-empty
+  `m_PageButtons` array. Finalization occurs only after the post-hook proves
+  that the complete expected native batch was appended.
+- A `nil` result from inherited panel, parent, or content functions means
+  "reflection state unavailable", not "empty" or "detached".
+- The current page registry, row-to-setting link, and row/widget setting links
+  are authoritative while structural UMG calls are unavailable. A binding
+  with intact registry links is retained. An ambiguous attachment is deferred;
+  it is never discarded merely because a structural call returned `nil`.
+- The native Int, Float, and two Enum Test rows are identified from the page
+  registry. They are collapsed without removing them because native
+  `Reinitialize` owns and restores the registered rows.
+- Collapsing uses the reflected native UFunction
+  `/Script/UMG.Widget:SetVisibility` with the row as its explicit context.
+  This bypasses the inconsistent inherited member lookup and synchronizes the
+  live Slate widget; a raw `Visibility` property write alone may not do so
+  until the settings screen is rebuilt.
+- Reordering and reattachment are skipped when panel structure cannot be read.
+  No operation may interpret an unavailable child count as zero.
+
+Version `0.4.56` established the raw-only construction seed. Version `0.4.57`
+added registry-authoritative binding retention and eliminated duplicate custom
+rows. Version `0.4.58` added the reflected `SetVisibility` call, which hid all
+native Test rows on the first settings entry rather than only after reopening
+the screen.
+
+Version `0.4.58` passed six complete cold-start tests. Versions `0.4.59`
+through `0.4.67` then removed the temporary lifecycle, binding, visibility,
+navigation, and page-build diagnostics in isolated steps. Every step passed
+three complete cold starts, including category changes, reopening Settings,
+and a final toggle persistence test. Commit `5416f6f` preserves the fully
+instrumented stable reference; commit `e53c0c7` is the cleaned `0.4.67`
+baseline.
+
+The validation above covers complete game starts. UE4SS hot reload can leave
+old hooks, page state, or previously injected rows alive and is not part of the
+stability guarantee for this integration.
