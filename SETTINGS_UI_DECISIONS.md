@@ -231,3 +231,13 @@ changed runtime behavior despite removing only code believed to be diagnostic.
 The exact timing, object-lifetime, or callback-order dependency has not been
 isolated. Keep the complete `0.4.43` implementation as the known-good baseline
 and do not repeat that cleanup as one combined change.
+
+As a first isolated cleanup experiment, version `0.4.45` removed only the
+`Native Mods settings commit begin/end` log writes while retaining every
+diagnostic read, hook, cache, and callback. One cold start displayed all four
+native Test settings again; the following restart with the same build did not.
+This A/B result is nondeterministic and does not establish the removed logs as
+the cause. It instead confirms an unresolved lifecycle/timing race that can
+produce different results from identical code. Keep `0.4.43` as the known-good
+baseline for now, but treat the log-removal experiment as inconclusive rather
+than as a failed functional change.
