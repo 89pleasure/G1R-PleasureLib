@@ -1,4 +1,4 @@
-local VERSION = "0.4.66"
+local VERSION = "0.4.67"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -279,8 +279,8 @@ local function set_object_property(object, property_name, value)
 end
 
 local function set_widget_visibility(runtime, widget, visibility)
-    if not is_valid_object(widget) then return false end
-    local property_ok = set_object_property(widget, "Visibility", visibility)
+    if not is_valid_object(widget) then return end
+    set_object_property(widget, "Visibility", visibility)
 
     -- In some cold-start runs UE4SS resolves the concrete Blueprint row but
     -- not inherited UWidget methods through UObject.__index. Invoke the native
@@ -290,13 +290,12 @@ local function set_widget_visibility(runtime, widget, visibility)
         local reflected_ok = pcall(function()
             return set_visibility_function(widget, visibility)
         end)
-        if reflected_ok then return true end
+        if reflected_ok then return end
     end
 
-    local member_ok = pcall(function()
+    pcall(function()
         return widget:SetVisibility(visibility)
     end)
-    return member_ok or property_ok
 end
 
 local function set_bool_property(object, property_name, value)
@@ -650,7 +649,6 @@ local function create_bool_setting_widget(runtime, row, setting)
             .. " content=" .. object_full_name(widget))
     end
 
-    runtime:debug_log("falling back to direct bool widget creation")
     local widget = create_user_widget(runtime, row, GAME_SETTINGS_BOOL_WIDGET_CLASS)
     if not is_valid_object(widget) then return nil, "bool widget creation failed" end
     if not link_bool_setting_widget(runtime, row, widget, setting) then
@@ -673,8 +671,6 @@ local function create_bool_setting_widget(runtime, row, setting)
             if is_valid_object(content)
                 and link_bool_setting_widget(runtime, row, content, setting)
             then
-                runtime:debug_log("reused native bool widget already owned by settings row"
-                    .. " widget=" .. object_full_name(content))
                 runtime:try(function() widget:RemoveFromParent() end)
                 widget = content
             else
@@ -1094,7 +1090,7 @@ local function inject_game_settings(runtime, page)
     if page_key == "" then return false end
     local page_state = game_settings_state.pages[page_key]
     if page_state == nil then
-        page_state = { page = page, bindings = {}, headers = {} }
+        page_state = { bindings = {}, headers = {} }
         game_settings_state.pages[page_key] = page_state
     end
     if not initialize_mod_settings_page(runtime, page, page_state, panel) then
@@ -1183,14 +1179,7 @@ local function enable_mod_settings_page(runtime, page)
     -- unsafe construction-time object notification.
     local written = set_bool_property(page, "bIsEnabled", true)
     runtime:try(function() page:SetIsEnabled(true) end)
-    local raw_enabled = runtime:try(function()
-        return page.bIsEnabled
-    end) == true
-    local getter_enabled = runtime:try(function()
-        return page:GetIsEnabled()
-    end) == true
-    return written and raw_enabled,
-        raw_enabled, getter_enabled
+    return written
 end
 
 local function settings_page_button_for(runtime, main, switcher, target_page,
@@ -1256,7 +1245,6 @@ local function finalize_native_mod_settings_page(runtime, main,
 
     local state = game_settings_state.native_pages_by_main[main_key]
     local button = state and runtime:unwrap(state.button) or nil
-    local ordinal = state and state.ordinal or nil
     -- A button can only be mapped to this page after CreatePageButtons has
     -- produced the complete native batch. Positional lookup without that
     -- confirmation maps ordinal 1 to the Game button when the dormant Test
@@ -1267,7 +1255,7 @@ local function finalize_native_mod_settings_page(runtime, main,
     -- remain valid in m_PageButtons. An explicit batch base must therefore
     -- always replace the cached (now hidden) button with the new visible one.
     if button_base ~= nil or not is_valid_object(button) then
-        button, ordinal = settings_page_button_for(runtime, main, switcher,
+        button = settings_page_button_for(runtime, main, switcher,
             page, button_base)
     end
     if not is_valid_object(button) then return page end
@@ -1286,7 +1274,6 @@ local function finalize_native_mod_settings_page(runtime, main,
     state.main = main
     state.page = page
     state.button = button
-    state.ordinal = ordinal
     return page, button
 end
 
@@ -1384,8 +1371,6 @@ local function commit_game_settings_page(runtime, page)
     local page_state = game_settings_state.pages[object_identity(page)]
     if page_state == nil then return end
 
-    runtime:log("Native Mods settings commit begin")
-
     for _, binding in pairs(page_state.bindings) do
         if is_valid_object(binding.setting) then
             local widget_value = runtime:unwrap(runtime:try(function()
@@ -1416,7 +1401,6 @@ local function commit_game_settings_page(runtime, page)
             end
         end
     end
-    runtime:log("Native Mods settings commit end")
 end
 
 local function binding_for_bool_widget(runtime, context)
