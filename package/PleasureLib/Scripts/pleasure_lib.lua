@@ -1,4 +1,4 @@
-local VERSION = "0.4.62"
+local VERSION = "0.4.63"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -1823,15 +1823,9 @@ local function ensure_game_settings_notifications(runtime)
                 -- Seed only the reflected gate read by CreatePageButtons. Do
                 -- not call widget functions or touch FText/content while the
                 -- instance is still being constructed.
-                local write_ok = pcall(function()
+                pcall(function()
                     page.bIsEnabled = true
                 end)
-                local raw_enabled = runtime:try(function()
-                    return page.bIsEnabled
-                end) == true
-                runtime:log("Mods page construction seed write="
-                    .. tostring(write_ok)
-                    .. " raw=" .. tostring(raw_enabled))
             end)
         end)
     end
