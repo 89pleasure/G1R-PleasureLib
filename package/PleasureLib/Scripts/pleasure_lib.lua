@@ -1,4 +1,4 @@
-local VERSION = "0.4.58"
+local VERSION = "0.4.59"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -245,7 +245,6 @@ local game_settings_state = {
     observed_mains = {},
     native_pages_by_main = {},
     create_page_button_batches = {},
-    lifecycle_sequence = 0,
     bindings_by_widget = {},
     bindings_by_setting = {},
 }
@@ -1200,84 +1199,6 @@ local function diagnostic_value(runtime, fn)
     return tostring(value)
 end
 
-local function diagnose_mod_page_lifecycle(runtime, page, event)
-    page = runtime:unwrap(page)
-    if not is_mod_settings_page(page) then return end
-
-    game_settings_state.lifecycle_sequence =
-        game_settings_state.lifecycle_sequence + 1
-    local sequence = game_settings_state.lifecycle_sequence
-    local panel = runtime:unwrap(runtime:try(function()
-        return page.VerticalBox_Content
-    end))
-    local panel_parent = runtime:unwrap(runtime:try(function()
-        return panel:GetParent()
-    end))
-    local raw_child_count = runtime:unwrap(runtime:try(function()
-        return panel:GetChildrenCount()
-    end))
-    local child_count = tonumber(raw_child_count) or 0
-    local scroll_box = runtime:unwrap(runtime:try(function()
-        return page.ScrollBox_Content
-    end))
-    local raw_scroll_child_count = runtime:unwrap(runtime:try(function()
-        return scroll_box:GetChildrenCount()
-    end))
-    local scroll_child_count = tonumber(raw_scroll_child_count) or 0
-    local scroll_child = runtime:unwrap(runtime:try(function()
-        return scroll_box:GetChildAt(0)
-    end))
-    local row_count = tonumber(runtime:try(function()
-        return #page.m_SettingsRowWidgets
-    end)) or 0
-    local page_state = game_settings_state.pages[object_identity(page)]
-    local parts = {}
-    for index = 0, child_count - 1 do
-        local child = runtime:unwrap(runtime:try(function()
-            return panel:GetChildAt(index)
-        end))
-        local setting = runtime:unwrap(runtime:try(function()
-            return child.m_Setting
-        end))
-        local child_class = object_full_name(child):match("^([^ ]+)")
-            or "<unknown>"
-        local setting_class = object_full_name(setting):match("^([^ ]+)")
-            or "<none>"
-        table.insert(parts, tostring(index)
-            .. ":" .. child_class
-            .. "/" .. setting_class
-            .. ":raw=" .. diagnostic_value(runtime, function()
-                return child.Visibility
-            end)
-            .. ":getter=" .. diagnostic_value(runtime, function()
-                return child:GetVisibility()
-            end))
-    end
-    runtime:log("Mods lifecycle seq=" .. tostring(sequence)
-        .. " event=" .. tostring(event)
-        .. " initialized=" .. tostring(
-            page_state ~= nil and page_state.initialized == true)
-        .. " page=" .. object_full_name(page)
-        .. " panel=" .. object_full_name(panel)
-        .. " panelParent=" .. object_full_name(panel_parent)
-        .. " panelCountRaw=" .. safe_to_string(raw_child_count)
-        .. " scroll=" .. object_full_name(scroll_box)
-        .. " scrollCountRaw=" .. safe_to_string(raw_scroll_child_count)
-        .. " scrollChild0=" .. object_full_name(scroll_child)
-        .. " registryRows=" .. tostring(row_count)
-        .. " panelChildren=" .. tostring(child_count)
-        .. " rows=[" .. table.concat(parts, " | ") .. "]")
-end
-
-local function schedule_mod_page_lifecycle_samples(runtime, page, event)
-    for _, delay_ms in ipairs({ 0, 50, 250 }) do
-        runtime:delay_game_thread(delay_ms, function()
-            diagnose_mod_page_lifecycle(runtime, page,
-                tostring(event) .. "+" .. tostring(delay_ms) .. "ms")
-        end)
-    end
-end
-
 local function diagnose_page_bindings(runtime, page)
     local page_state = game_settings_state.pages[object_identity(page)]
     if page_state == nil then return end
@@ -1919,15 +1840,8 @@ local function ensure_game_settings_hooks(runtime)
     then
         if runtime:register_hook(MOD_SETTINGS_PAGE_ACTIVATED, function(context)
             local page = runtime:unwrap(context)
-            diagnose_mod_page_lifecycle(runtime, page, "activated-hook")
             runtime:delay_game_thread(0, function()
-                diagnose_mod_page_lifecycle(runtime, page,
-                    "activated-delayed-before")
                 activate_native_mod_settings_page(runtime, page)
-                diagnose_mod_page_lifecycle(runtime, page,
-                    "activated-delayed-after")
-                schedule_mod_page_lifecycle_samples(runtime, page,
-                    "activated-followup")
                 diagnose_page_bindings(runtime, page)
                 for _, main in pairs(game_settings_state.observed_mains) do
                     local switcher = runtime:unwrap(runtime:try(function()
@@ -1952,24 +1866,12 @@ local function ensure_game_settings_hooks(runtime)
         and is_valid_object(runtime:find_object(SETTINGS_PAGE_REINITIALIZE))
     then
         if runtime:register_hook(SETTINGS_PAGE_REINITIALIZE,
-            function(context)
-                diagnose_mod_page_lifecycle(runtime,
-                    runtime:unwrap(context), "reinitialize-pre")
-                return nil
-            end,
+            noop,
             function(context)
                 local page = runtime:unwrap(context)
                 if is_mod_settings_page(page) then
-                    diagnose_mod_page_lifecycle(runtime, page,
-                        "reinitialize-post")
                     runtime:delay_game_thread(0, function()
-                        diagnose_mod_page_lifecycle(runtime, page,
-                            "reinitialize-delayed-before")
                         inject_game_settings(runtime, page)
-                        diagnose_mod_page_lifecycle(runtime, page,
-                            "reinitialize-delayed-after")
-                        schedule_mod_page_lifecycle_samples(runtime, page,
-                            "reinitialize-followup")
                     end)
                 end
                 return nil
