@@ -1,4 +1,4 @@
-local VERSION = "0.4.60"
+local VERSION = "0.4.61"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -778,15 +778,7 @@ local function retain_registered_binding(runtime, binding)
 end
 
 local function ensure_binding_attached(runtime, binding, panel)
-    runtime:log("Mods binding attach begin id="
-        .. tostring(binding.entry and binding.entry.id)
-        .. " rowValid=" .. tostring(is_valid_object(binding.row))
-        .. " settingValid=" .. tostring(is_valid_object(binding.setting))
-        .. " widgetValid=" .. tostring(is_valid_object(binding.widget))
-        .. " row=" .. object_full_name(binding.row)
-        .. " setting=" .. object_full_name(binding.setting))
     if not is_valid_object(binding.row) or not is_valid_object(binding.setting) then
-        runtime:log("Mods binding attach rejected invalid row or setting")
         return false
     end
 
@@ -796,29 +788,19 @@ local function ensure_binding_attached(runtime, binding, panel)
     -- appending a duplicate on every page activation.
     local child_count = panel_child_count(runtime, panel)
     if child_count == nil and retain_registered_binding(runtime, binding) then
-        runtime:log("Mods binding retained from native row registry id="
-            .. tostring(binding.entry and binding.entry.id))
         return is_valid_object(binding.widget)
     elseif child_count == nil then
-        runtime:log("Mods binding attachment deferred id="
-            .. tostring(binding.entry and binding.entry.id))
         return nil
     end
 
     local parent = runtime:unwrap(runtime:try(function()
         return binding.row:GetParent()
     end))
-    runtime:log("Mods binding attach parent=" .. object_full_name(parent)
-        .. " panel=" .. object_full_name(panel)
-        .. " match=" .. tostring(object_identity(parent)
-            == object_identity(panel)))
     if object_identity(parent) ~= object_identity(panel) then
         runtime:try(function() binding.row:RemoveFromParent() end)
         local added = runtime:try(function()
             return panel:AddChildToVerticalBox(binding.row)
         end)
-        runtime:log("Mods binding attach addResult="
-            .. safe_to_string(runtime:unwrap(added)))
         if added == nil then return false end
     end
 
@@ -828,9 +810,6 @@ local function ensure_binding_attached(runtime, binding, panel)
     local content = runtime:unwrap(runtime:try(function()
         return container:GetContent()
     end))
-    runtime:log("Mods binding attach content=" .. object_full_name(content)
-        .. " expectedWidget=" .. object_full_name(binding.widget)
-        .. " contentValid=" .. tostring(is_valid_object(content)))
     if is_valid_object(content)
         and object_identity(content) ~= object_identity(binding.widget)
     then
@@ -865,21 +844,11 @@ local function ensure_binding_attached(runtime, binding, panel)
         runtime:debug_log("game setting '" .. binding.entry.id
             .. "' row registry unavailable after reattach; keeping binding")
     end
-    runtime:log("Mods binding attach success id="
-        .. tostring(binding.entry and binding.entry.id))
     return true
 end
 
 local function inject_bool_setting(runtime, page, page_state, entry, panel)
     local existing_binding = page_state.bindings[entry.id]
-    runtime:log("Mods binding inject id=" .. tostring(entry.id)
-        .. " existing=" .. tostring(existing_binding ~= nil)
-        .. " nativeClaimed=" .. tostring(
-            page_state.native_bool_claimed == true)
-        .. " existingRowValid=" .. tostring(existing_binding ~= nil
-            and is_valid_object(existing_binding.row))
-        .. " existingSettingValid=" .. tostring(existing_binding ~= nil
-            and is_valid_object(existing_binding.setting)))
     if existing_binding ~= nil
         and is_valid_object(existing_binding.row)
         and is_valid_object(existing_binding.setting)
@@ -890,16 +859,12 @@ local function inject_bool_setting(runtime, page, page_state, entry, panel)
             panel)
         if attached == true then
             page_state.bindings[entry.id] = existing_binding
-            runtime:log("Mods binding reused id=" .. tostring(entry.id))
             return synchronize_binding(existing_binding)
         elseif attached == nil then
             return false
         end
     end
     if existing_binding ~= nil then
-        runtime:log("Mods binding discarded id=" .. tostring(entry.id)
-            .. " row=" .. object_full_name(existing_binding.row)
-            .. " setting=" .. object_full_name(existing_binding.setting))
         unindex_binding(existing_binding)
         runtime:try(function() existing_binding.row:RemoveFromParent() end)
         page_state.bindings[entry.id] = nil
@@ -907,9 +872,6 @@ local function inject_bool_setting(runtime, page, page_state, entry, panel)
 
     local use_native_row = page_state.native_bool_claimed ~= true
         and is_valid_object(page_state.native_bool_row)
-    runtime:log("Mods binding create id=" .. tostring(entry.id)
-        .. " useNativeRow=" .. tostring(use_native_row)
-        .. " nativeRow=" .. object_full_name(page_state.native_bool_row))
     local row = use_native_row and page_state.native_bool_row
         or create_user_widget(runtime, page, GAME_SETTINGS_ROW_CLASS)
     if not is_valid_object(row) then
@@ -990,9 +952,6 @@ local function inject_bool_setting(runtime, page, page_state, entry, panel)
     page_state.bindings[entry.id] = binding
     if use_native_row then page_state.native_bool_claimed = true end
     index_binding(binding)
-    runtime:log("Mods binding created id=" .. tostring(entry.id)
-        .. " row=" .. object_full_name(row)
-        .. " setting=" .. object_full_name(setting))
     return true
 end
 
