@@ -241,3 +241,11 @@ the cause. It instead confirms an unresolved lifecycle/timing race that can
 produce different results from identical code. Keep `0.4.43` as the known-good
 baseline for now, but treat the log-removal experiment as inconclusive rather
 than as a failed functional change.
+
+Version `0.4.46` tested the hypothesis that `Reinitialize` replaces the native
+Test row instances after the first initialization. On every injection it
+rescanned `m_SettingsRowWidgets`, protected the claimed native Bool row and all
+PleasureLib bindings, and collapsed every remaining registered row. The four
+native Test entries were immediately visible on both of two complete game
+starts. Reject this registry-rescan approach and do not repeat it; the complete
+Lua implementation was restored byte-for-byte to `0.4.43`.
