@@ -1,4 +1,4 @@
-local VERSION = "0.4.65"
+local VERSION = "0.4.66"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -1287,11 +1287,6 @@ local function finalize_native_mod_settings_page(runtime, main,
     state.page = page
     state.button = button
     state.ordinal = ordinal
-    if state.logged ~= true then
-        runtime:log("Native Mods settings page enabled at button "
-            .. tostring(ordinal))
-        state.logged = true
-    end
     return page, button
 end
 
