@@ -78,3 +78,14 @@ Nexus image assets are stored in `assets/nexus` and can be regenerated with:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\generate_nexus_assets.ps1
 ```
+
+## Package Build
+
+Generate `package/PleasureLib.zip` from the current package folder with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_package.ps1
+```
+
+The script validates the required file list and every archived file hash before
+replacing the existing package.
