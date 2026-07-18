@@ -314,3 +314,48 @@ baseline.
 The validation above covers complete game starts. UE4SS hot reload can leave
 old hooks, page state, or previously injected rows alive and is not part of the
 stability guarantee for this integration.
+
+## Public settings row ownership
+
+The original Test-page rows are implementation-owned native examples, not a
+global pool for registered mod settings. Reusing them would make the first
+Bool, Int, Float, Enum spinner, and Enum dropdown registrations behave
+differently from every later registration, with ownership depending on mod
+load order.
+
+Beginning with the multi-type API work for version `0.5.0`, all five original
+Test rows remain collapsed. Every registered setting receives its own
+`W_SettingsRow`, its own constructed typed `SettingObject`, and its own native
+value widget. This invariant applies equally to first-party and third-party
+mods and removes any fixed global setting limit or load-order preference.
+
+UE4SS gives separate Lua mods isolated PleasureLib state even when they use the
+same library version. A later mod therefore discovers rows already appended by
+an earlier mod. Those generated rows intentionally use the same typed Test
+setting classes as the native examples, so setting-class matching must never be
+used to decide which rows to collapse. Only the five stable WidgetTree children
+named `SettingsRow_Bool`, `SettingsRow_Int`, `SettingsRow_Float`,
+`SettingsRow_Enum`, and `SettingsRow_Enum_Dropdown` are native Test rows.
+Runtime-created `W_SettingsRow_C_*` instances always remain visible regardless
+of which mod registered them or loaded first.
+
+A complete two-mod cold-start test on 2026-07-18 displayed all five Extended
+Item Tooltips rows and all six Let Snaf Cook rows in their separate sections.
+This confirms the exact-name ownership rule across isolated mod runtimes.
+
+## Mods page scroll clipping
+
+The dormant Test page's top and bottom lines are separate decorative Image
+widgets; they do not mask overflowing content. With enough public API rows to
+scroll, the Test page allowed rows to paint across those visual boundaries,
+unlike the shipping Graphics page.
+
+PleasureLib therefore forces `ClipToBounds` on the live Test page's
+`ScrollBox_Content` during every injection. Use the reflected
+`/Script/UMG.Widget:SetClipping` UFunction with the ScrollBox as its explicit
+context. A raw `Clipping` property write is retained only as a defensive seed:
+`SScrollBox` is a clipping proxy, so the setter is required to propagate the
+state to its nested Slate widgets.
+
+A complete cold-start test on 2026-07-18 confirmed that rows are clipped at
+both visual scroll boundaries.

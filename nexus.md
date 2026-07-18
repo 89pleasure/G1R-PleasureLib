@@ -23,11 +23,12 @@ PleasureLib currently provides generic helpers for:
 - Delayed callbacks and game-thread callbacks
 - Defensive hook registration
 - Focused runtime capture of newly created UE objects
-- Localized native ON/OFF settings on a dedicated Settings -> Mods page
+- Localized native Bool, Int, Float, and Enum settings on a dedicated
+  Settings -> Mods page
 
 The native settings API activates the game's unused native test page as a
-dedicated Mods category. It creates native settings rows and boolean widgets,
-groups them by mod, and can persist changes to a mod INI.
+dedicated Mods category. It creates native settings rows and widgets, groups
+them by mod, and can persist changes to a mod INI.
 
 Version 0.4.0 moves mod settings out of the vanilla Game page. The dedicated
 Mods page owns its complete row container, avoiding conflicts with category
@@ -54,11 +55,13 @@ The final folder should contain:
 
 ```text
 PleasureLib/
+  API.md
   enabled.txt
   readme.txt
   Scripts/
     main.lua
     pleasure_lib.lua
+    pleasure_lib_settings.lua
 ```
 
 ## Load Order
@@ -107,10 +110,14 @@ log prefix and object cache scoped to your mod.
 See the [PleasureLib Wiki](https://github.com/89pleasure/G1R-PleasureLib/wiki)
 for installation, the recommended loader, API documentation, and recipes.
 
-For a localized native boolean option, use
-`runtime:register_game_bool_setting(options)`. It supports getter/setter
-callbacks, localized names and descriptions, an optional default, and optional
-INI persistence.
+Localized native settings are available through
+`runtime:register_game_bool_setting(options)`,
+`runtime:register_game_int_setting(options)`,
+`runtime:register_game_float_setting(options)`, and
+`runtime:register_game_enum_setting(options)`. They support getter/setter
+callbacks, localized names and descriptions, defaults, and optional INI
+persistence. Numeric settings accept ranges, Float settings accept a step
+size, and Enum settings support both spinner and dropdown widgets.
 
 ## Compatibility
 
@@ -129,7 +136,7 @@ Do not remove it while installed mods still list it as a requirement.
 
 ## Current Version
 
-`0.4.67`
+`0.5.0`
 
 ## Credits
 

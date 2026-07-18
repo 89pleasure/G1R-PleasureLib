@@ -48,9 +48,24 @@ The loader makes consuming mods independent of `mods.txt` load order. See the
 [Getting Started](https://github.com/89pleasure/G1R-PleasureLib/wiki/Getting-Started)
 guide for the complete setup.
 
+## Native Settings API
+
+Runtime instances expose the game's four native value types:
+
+- `register_game_bool_setting(options)`
+- `register_game_int_setting(options)` with `minimum`, `maximum`, and `default`
+- `register_game_float_setting(options)` with `minimum`, `maximum`, `step`,
+  `default`, and optional `always_show_sign`
+- `register_game_enum_setting(options)` with a `values` list, a zero-based
+  numeric value, and `widget = "spinner"` or `widget = "dropdown"`
+
+Every registration requires a stable `id` plus `get()` and `set(value)`
+callbacks. The existing `section`, `translations`, and `persist` options are
+shared by all four types.
+
 ## Current Status
 
-Stable. Current version: `0.4.67`.
+Stable. Current version: `0.5.0`.
 
 PleasureLib is used by multiple released mods, including Extended Item
 Tooltips, QuickBites, and Let Snaf Cook. The public API remains deliberately

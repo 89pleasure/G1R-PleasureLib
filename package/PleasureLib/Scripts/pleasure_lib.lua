@@ -1,4 +1,4 @@
-local VERSION = "0.4.68"
+local VERSION = "0.5.0"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION
@@ -229,6 +229,9 @@ local settings = settings_factory({
 })
 if type(settings) ~= "table"
     or type(settings.register_game_bool_setting) ~= "function"
+    or type(settings.register_game_int_setting) ~= "function"
+    or type(settings.register_game_float_setting) ~= "function"
+    or type(settings.register_game_enum_setting) ~= "function"
 then
     error("pleasure_lib_settings.lua returned an invalid settings module")
 end
@@ -473,6 +476,9 @@ function PleasureLib.new(options)
     end
 
     runtime.register_game_bool_setting = settings.register_game_bool_setting
+    runtime.register_game_int_setting = settings.register_game_int_setting
+    runtime.register_game_float_setting = settings.register_game_float_setting
+    runtime.register_game_enum_setting = settings.register_game_enum_setting
 
     return runtime
 end

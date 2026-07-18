@@ -33,18 +33,81 @@ return function(dependencies)
         GAME_SETTINGS_ROW_CLASS .. ":Set Enabled Selectable"
     local GAME_SETTINGS_HEADER_CLASS =
         "/Game/UI/CoreMenus/Settings/W_SettingsSectionHeader.W_SettingsSectionHeader_C"
-    local GAME_SETTINGS_BOOL_WIDGET_CLASS =
-        "/Game/UI/CoreMenus/Settings/W_Setting_Bool.W_Setting_Bool_C"
-    local BOOL_WIDGET_VALUE_CHANGED =
-        GAME_SETTINGS_BOOL_WIDGET_CLASS .. ":OnValueChanged"
-    local GAME_SETTINGS_BOOL_OBJECT_CLASS = "/Script/G1R.SettingObject_Bool_Test"
-    local BOOL_WIDGET_SET_VALUE = "/Script/G1R.SettingObjectWidget_Bool:SetValue"
-    local BOOL_SETTING_SET_VALUE = "/Script/G1R.SettingObject_Bool:SetValue"
     local WIDGET_BLUEPRINT_LIBRARY = "/Script/UMG.Default__WidgetBlueprintLibrary"
+    local WIDGET_SET_CLIPPING = "/Script/UMG.Widget:SetClipping"
     local WIDGET_SET_VISIBILITY = "/Script/UMG.Widget:SetVisibility"
     local INTERNATIONALIZATION_LIBRARY =
         "/Script/Engine.Default__KismetInternationalizationLibrary"
+    local WIDGET_CLIPPING_CLIP_TO_BOUNDS = 1
     local WIDGET_VISIBILITY_COLLAPSED = 1
+    local ENUM_WIDGET_SPINNER = 0
+    local ENUM_WIDGET_DROPDOWN = 1
+    local NATIVE_TEST_ROW_NAMES = {
+        SettingsRow_Bool = true,
+        SettingsRow_Int = true,
+        SettingsRow_Float = true,
+        SettingsRow_Enum = true,
+        SettingsRow_Enum_Dropdown = true,
+    }
+    local GAME_SETTING_TYPES = {
+        bool = {
+            object_class = "/Script/G1R.SettingObject_Bool_Test",
+            widget_class =
+                "/Game/UI/CoreMenus/Settings/W_Setting_Bool.W_Setting_Bool_C",
+            setting_set_value = "/Script/G1R.SettingObject_Bool:SetValue",
+            widget_set_value =
+                "/Script/G1R.SettingObjectWidget_Bool:SetValue",
+            widget_changed = {
+                "/Game/UI/CoreMenus/Settings/W_Setting_Bool.W_Setting_Bool_C"
+                    .. ":OnValueChanged",
+            },
+            native_name = "SettingObject_Bool_Test",
+        },
+        int = {
+            object_class = "/Script/G1R.SettingObject_Int_Test",
+            widget_class =
+                "/Game/UI/CoreMenus/Settings/W_Setting_Int.W_Setting_Int_C",
+            setting_set_value = "/Script/G1R.SettingObject_Int:SetValue",
+            widget_set_value =
+                "/Script/G1R.SettingObjectWidget_Int:SetValue",
+            widget_changed = {
+                "/Game/UI/CoreMenus/Settings/W_Setting_Int.W_Setting_Int_C"
+                    .. ":OnValueChanged",
+            },
+            native_name = "SettingObject_Int_Test",
+        },
+        float = {
+            object_class = "/Script/G1R.SettingObject_Float_Test",
+            widget_class =
+                "/Game/UI/CoreMenus/Settings/W_Setting_Float.W_Setting_Float_C",
+            setting_set_value = "/Script/G1R.SettingObject_Float:SetValue",
+            widget_set_value =
+                "/Script/G1R.SettingObjectWidget_Float:SetValue",
+            widget_changed = {
+                "/Game/UI/CoreMenus/Settings/W_Setting_Float.W_Setting_Float_C"
+                    .. ":OnValueChanged",
+            },
+            native_name = "SettingObject_Float_Test",
+        },
+        enum = {
+            object_class = "/Script/G1R.SettingObject_Enum_Test",
+            widget_class =
+                "/Game/UI/CoreMenus/Settings/W_Setting_Enum.W_Setting_Enum_C",
+            dropdown_widget_class =
+                "/Game/UI/CoreMenus/Settings/W_Setting_EnumDropDown"
+                    .. ".W_Setting_EnumDropDown_C",
+            setting_set_value = "/Script/G1R.SettingObject_Enum:SetValue",
+            widget_set_value =
+                "/Script/G1R.SettingObjectWidget_Enum:SetValue",
+            widget_changed = {
+                "/Game/UI/CoreMenus/Settings/W_Setting_Enum.W_Setting_Enum_C"
+                    .. ":OnValueChanged",
+                "/Game/UI/CoreMenus/Settings/W_Setting_EnumDropDown"
+                    .. ".W_Setting_EnumDropDown_C:OnValueChanged",
+            },
+            native_name = "SettingObject_Enum_Test",
+        },
+    }
     local MOD_SECTION_TRANSLATIONS = {
         en = "Mods",
         de = "Mods",
@@ -72,9 +135,7 @@ return function(dependencies)
         page_reinitialize_hook_registered = false,
         page_apply_hook_registered = false,
         page_discard_hook_registered = false,
-        bool_widget_value_hook_registered = false,
-        bool_setting_value_hook_registered = false,
-        bool_widget_changed_hook_registered = false,
+        value_hooks_registered = {},
         native_pages_by_main = {},
         create_page_button_batches = {},
         bindings_by_widget = {},
@@ -97,6 +158,12 @@ return function(dependencies)
     local function is_mod_settings_page(page)
         return is_valid_object(page)
             and object_full_name(page):find("W_SettingsPage_Test_C", 1, true) ~= nil
+    end
+
+    local function is_native_test_row(row)
+        local full_name = object_full_name(row)
+        local short_name = full_name:match("([^%.: ]+)$")
+        return short_name ~= nil and NATIVE_TEST_ROW_NAMES[short_name] == true
     end
 
     local function set_object_property(object, property_name, value)
@@ -129,6 +196,29 @@ return function(dependencies)
         pcall(function()
             return widget:SetVisibility(visibility)
         end)
+    end
+
+    local function set_widget_clipping(runtime, widget, clipping)
+        if not is_valid_object(widget) then return false end
+
+        -- SScrollBox is a clipping proxy. Invoke the reflected setter so its
+        -- nested Slate widgets receive the new clipping state immediately.
+        local set_clipping_function = runtime:find_object(WIDGET_SET_CLIPPING)
+        if is_valid_object(set_clipping_function) then
+            local reflected_ok = pcall(function()
+                return set_clipping_function(widget, clipping)
+            end)
+            if reflected_ok then return true end
+        end
+
+        local member_ok = pcall(function()
+            return widget:SetClipping(clipping)
+        end)
+        if member_ok then return true end
+
+        -- Construction-time reflection can expose the property before either
+        -- setter. Keep the raw value as a seed for the next Slate rebuild.
+        return set_object_property(widget, "Clipping", clipping)
     end
 
     local function set_bool_property(object, property_name, value)
@@ -229,10 +319,80 @@ return function(dependencies)
         return runtime:try(function() return library:Conv_StringToText(text) end)
     end
 
+    local function finite_number(value)
+        local number = tonumber(value)
+        if number == nil or number ~= number
+            or number == math.huge or number == -math.huge
+        then
+            return nil
+        end
+        return number
+    end
+
+    local function clamp_number(value, minimum, maximum)
+        if minimum ~= nil and value < minimum then return minimum end
+        if maximum ~= nil and value > maximum then return maximum end
+        return value
+    end
+
+    local function coerce_setting_value(entry, value)
+        if entry.kind == "bool" then
+            if type(value) == "boolean" then return value end
+            return nil
+        end
+
+        local number = finite_number(value)
+        if number == nil then return nil end
+        if entry.kind == "int" or entry.kind == "enum" then
+            number = math.floor(number)
+        end
+        return clamp_number(number, entry.minimum, entry.maximum)
+    end
+
     local function setting_value(entry)
         local value = entry.runtime:try(entry.get)
-        if value == nil then value = entry.default end
-        return value == true
+        value = coerce_setting_value(entry, value)
+        if value == nil then value = coerce_setting_value(entry, entry.default) end
+        if value ~= nil then return value end
+        if entry.kind == "bool" then return false end
+        return entry.minimum or 0
+    end
+
+    local function setting_values_equal(entry, left, right)
+        if entry.kind == "float" then
+            left = finite_number(left)
+            right = finite_number(right)
+            return left ~= nil and right ~= nil and math.abs(left - right) <= 0.000001
+        end
+        return left == right
+    end
+
+    local function localized_enum_value(runtime, entry, index)
+        local translations = entry.value_translations
+        if type(translations) == "table" then
+            local language = current_language(runtime)
+            local base = language:match("^([^-]+)") or language
+            local selected = translations[language]
+                or translations[base]
+                or translations.en
+                or translations["en-us"]
+            if type(selected) == "table" then
+                local value = selected[index]
+                if type(value) == "table" then
+                    value = value.name or value.label
+                end
+                if value ~= nil then return tostring(value) end
+            end
+        end
+
+        local value = entry.values[index]
+        if type(value) == "table" then
+            local fallback = value.name or value.label or value.value or index - 1
+            return localized_value(runtime,
+                value.translations or value.labels or value, "name", fallback)
+        end
+        if value ~= nil then return tostring(value) end
+        return tostring(index - 1)
     end
 
     local function resolve_persist_value(value)
@@ -308,6 +468,51 @@ return function(dependencies)
         return name_text
     end
 
+    local function configure_setting_type(runtime, setting, entry)
+        local value = setting_value(entry)
+
+        if entry.kind == "bool" then
+            set_bool_property(setting, "m_DefaultValue", entry.default)
+        elseif entry.kind == "int" then
+            set_integer_property(setting, "m_DefaultValue", entry.default)
+            set_integer_property(setting, "m_MinValue", entry.minimum)
+            set_integer_property(setting, "m_MaxValue", entry.maximum)
+        elseif entry.kind == "float" then
+            set_object_property(setting, "m_DefaultValue", entry.default)
+            set_object_property(setting, "m_MinValue", entry.minimum)
+            set_object_property(setting, "m_MaxValue", entry.maximum)
+            set_object_property(setting, "m_StepSize", entry.step)
+            set_bool_property(setting, "m_AlwaysShowSign",
+                entry.always_show_sign)
+        elseif entry.kind == "enum" then
+            set_integer_property(setting, "m_DefaultValue", entry.default)
+            set_integer_property(setting, "m_WidgetType", entry.enum_widget)
+            set_bool_property(setting, "m_ShouldValueWrapAround",
+                entry.wrap_around)
+
+            local names = runtime:try(function()
+                return setting.m_ValueNames
+            end)
+            local array_ready = names ~= nil and pcall(function()
+                names:Empty()
+                for index = 1, #entry.values do
+                    names[index] = to_text(runtime,
+                        localized_enum_value(runtime, entry, index))
+                end
+            end)
+            if not array_ready then
+                runtime:debug_log("mod setting '" .. entry.id
+                    .. "' enum value names could not be initialized")
+                return false
+            end
+            runtime:try(function() setting:Refresh() end)
+        end
+
+        runtime:try(function() setting:SetValue(value) end)
+        runtime:try(function() setting:ConfirmValue() end)
+        return true
+    end
+
     local function synchronize_binding(binding)
         local entry = binding.entry
         local runtime = entry.runtime
@@ -325,10 +530,10 @@ return function(dependencies)
 
         local value = setting_value(entry)
         binding.synchronizing = true
-        runtime:try(function() binding.setting:SetValue(value) end)
-        runtime:try(function() binding.setting:ConfirmValue() end)
+        configure_setting_type(runtime, binding.setting, entry)
         runtime:try(function()
             if is_valid_object(binding.widget) then
+                binding.widget:SetSettingObject(binding.setting)
                 binding.widget:SetValue(value, true)
             end
         end)
@@ -354,6 +559,11 @@ return function(dependencies)
         runtime:try(function() binding.widget.Button_Off:SetIsEnabled(true) end)
         runtime:try(function() binding.widget.Button_Toggle:SetIsEnabled(true) end)
         runtime:try(function() binding.widget.Slider_Value:SetIsEnabled(true) end)
+        runtime:try(function() binding.widget.Slider:SetIsEnabled(true) end)
+        runtime:try(function() binding.widget.Button_ArrowLeft:SetIsEnabled(true) end)
+        runtime:try(function() binding.widget.Button_ArrowRight:SetIsEnabled(true) end)
+        runtime:try(function() binding.widget.Button_Center:SetIsEnabled(true) end)
+        runtime:try(function() binding.widget.ComboBox_Options:SetIsEnabled(true) end)
     end
 
     local function ensure_mod_header(runtime, page, page_state, panel, section)
@@ -396,7 +606,7 @@ return function(dependencies)
         return header
     end
 
-    local function link_bool_setting_widget(runtime, row, widget, setting)
+    local function link_setting_widget(runtime, row, widget, setting)
         if not is_valid_object(widget) then return false end
         set_object_property(row, "m_SettingWidget", widget)
         runtime:try(function() widget:SetSettingObject(setting) end)
@@ -425,10 +635,10 @@ return function(dependencies)
         return nil
     end
 
-    local function create_bool_setting_widget(runtime, row, setting)
+    local function create_setting_widget(runtime, row, setting, entry)
         local widget = current_row_setting_widget(runtime, row)
         if is_valid_object(widget)
-            and link_bool_setting_widget(runtime, row, widget, setting)
+            and link_setting_widget(runtime, row, widget, setting)
         then
             return widget, nil
         end
@@ -442,7 +652,7 @@ return function(dependencies)
             widget = current_row_setting_widget(runtime, row)
 
             if ok and is_valid_object(widget)
-                and link_bool_setting_widget(runtime, row, widget, setting)
+                and link_setting_widget(runtime, row, widget, setting)
             then
                 return widget, nil
             end
@@ -454,10 +664,17 @@ return function(dependencies)
                 .. " content=" .. object_full_name(widget))
         end
 
-        local widget = create_user_widget(runtime, row, GAME_SETTINGS_BOOL_WIDGET_CLASS)
-        if not is_valid_object(widget) then return nil, "bool widget creation failed" end
-        if not link_bool_setting_widget(runtime, row, widget, setting) then
-            return nil, "bool widget setting link failed"
+        local setting_type = GAME_SETTING_TYPES[entry.kind]
+        local widget_class = setting_type and setting_type.widget_class
+        if entry.kind == "enum" and entry.enum_widget == ENUM_WIDGET_DROPDOWN then
+            widget_class = setting_type and setting_type.dropdown_widget_class
+        end
+        local widget = create_user_widget(runtime, row, widget_class)
+        if not is_valid_object(widget) then
+            return nil, entry.kind .. " widget creation failed"
+        end
+        if not link_setting_widget(runtime, row, widget, setting) then
+            return nil, entry.kind .. " widget setting link failed"
         end
 
         local parent = runtime:unwrap(runtime:try(function() return widget:GetParent() end))
@@ -474,12 +691,13 @@ return function(dependencies)
             end))
             if object_identity(content) ~= object_identity(widget) then
                 if is_valid_object(content)
-                    and link_bool_setting_widget(runtime, row, content, setting)
+                    and link_setting_widget(runtime, row, content, setting)
                 then
                     runtime:try(function() widget:RemoveFromParent() end)
                     widget = content
                 else
-                    return nil, "bool widget could not be set as row content"
+                    return nil, entry.kind
+                        .. " widget could not be set as row content"
                         .. "; requested=" .. object_full_name(widget)
                         .. "; actual=" .. object_full_name(content)
                 end
@@ -552,7 +770,7 @@ return function(dependencies)
         if not is_valid_object(linked_widget) then return false end
 
         if object_identity(linked_widget) ~= object_identity(binding.widget) then
-            link_bool_setting_widget(runtime, binding.row, linked_widget,
+            link_setting_widget(runtime, binding.row, linked_widget,
                 binding.setting)
             unindex_binding(binding)
             binding.widget = linked_widget
@@ -597,13 +815,13 @@ return function(dependencies)
         if is_valid_object(content)
             and object_identity(content) ~= object_identity(binding.widget)
         then
-            link_bool_setting_widget(runtime, binding.row, content, binding.setting)
+            link_setting_widget(runtime, binding.row, content, binding.setting)
             unindex_binding(binding)
             binding.widget = content
             index_binding(binding)
         elseif not is_valid_object(binding.widget) then
-            local widget = create_bool_setting_widget(runtime, binding.row,
-                binding.setting)
+            local widget = create_setting_widget(runtime, binding.row,
+                binding.setting, binding.entry)
             if not is_valid_object(widget) then return false end
             unindex_binding(binding)
             binding.widget = widget
@@ -631,11 +849,19 @@ return function(dependencies)
         return true
     end
 
-    local function inject_bool_setting(runtime, page, page_state, entry, panel)
+    local function entry_signature(entry)
+        if entry.kind == "enum" then
+            return entry.kind .. ":" .. tostring(entry.enum_widget)
+        end
+        return entry.kind
+    end
+
+    local function inject_setting(runtime, page, page_state, entry, panel)
         local existing_binding = page_state.bindings[entry.id]
         if existing_binding ~= nil
             and is_valid_object(existing_binding.row)
             and is_valid_object(existing_binding.setting)
+            and existing_binding.signature == entry_signature(entry)
         then
             existing_binding.entry = entry
             existing_binding.page = page
@@ -654,27 +880,22 @@ return function(dependencies)
             page_state.bindings[entry.id] = nil
         end
 
-        local use_native_row = page_state.native_bool_claimed ~= true
-            and is_valid_object(page_state.native_bool_row)
-        local row = use_native_row and page_state.native_bool_row
-            or create_user_widget(runtime, page, GAME_SETTINGS_ROW_CLASS)
+        local row = create_user_widget(runtime, page, GAME_SETTINGS_ROW_CLASS)
         if not is_valid_object(row) then
             runtime:debug_log("mod setting '" .. entry.id
                 .. "' failed: settings row could not be created")
             return false
         end
-        local setting = use_native_row and runtime:unwrap(runtime:try(function()
-            return row.m_Setting
-        end)) or construct_object(runtime, GAME_SETTINGS_BOOL_OBJECT_CLASS, row)
+        local setting_type = GAME_SETTING_TYPES[entry.kind]
+        local setting = construct_object(runtime, setting_type.object_class, row)
         if not is_valid_object(setting) then
             runtime:debug_log("mod setting '" .. entry.id
-                .. "' failed: bool setting object unavailable")
+                .. "' failed: " .. entry.kind .. " setting object unavailable")
             return false
         end
 
         local name_text = update_setting_description(runtime, setting, entry)
         local value = setting_value(entry)
-        set_object_property(setting, "m_DefaultValue", value)
         -- Both are restriction masks. Zero matches an unrestricted native Game
         -- setting and avoids relying on the page's row registry during cold-start.
         if not configure_setting_availability(runtime, setting) then
@@ -682,28 +903,26 @@ return function(dependencies)
                 .. "' availability initialization failed")
         end
 
-        runtime:try(function() setting:SetValue(value) end)
-        runtime:try(function() setting:ConfirmValue() end)
+        if not configure_setting_type(runtime, setting, entry) then
+            return false
+        end
         set_object_property(row, "m_Setting", setting)
         set_object_property(row, "m_AutoApplyChanges", true)
 
         runtime:try(function()
             if is_valid_object(row.Text_Name) then row.Text_Name:SetText(name_text) end
         end)
-        -- The native Test-page bool row is already fully initialized. Newly
-        -- created rows need Reinitialize before we retain their visible widget.
-        if not use_native_row then
-            runtime:try(function() row:Reinitialize() end)
-        end
+        runtime:try(function() row:Reinitialize() end)
         configure_setting_availability(runtime, setting)
-        local widget, widget_error = create_bool_setting_widget(runtime, row, setting)
+        local widget, widget_error = create_setting_widget(runtime, row, setting,
+            entry)
         if not is_valid_object(widget) then
             runtime:debug_log("mod setting '" .. entry.id
                 .. "' failed: " .. tostring(widget_error))
             return false
         end
         configure_setting_availability(runtime, setting)
-        link_bool_setting_widget(runtime, row, widget, setting)
+        link_setting_widget(runtime, row, widget, setting)
         runtime:try(function() widget:SetValue(value, true) end)
         local parent = runtime:unwrap(runtime:try(function()
             return row:GetParent()
@@ -725,6 +944,7 @@ return function(dependencies)
             row = row,
             setting = setting,
             widget = widget,
+            signature = entry_signature(entry),
             synchronizing = false,
         }
         if not append_settings_row(page, row) then
@@ -734,7 +954,6 @@ return function(dependencies)
             return false
         end
         page_state.bindings[entry.id] = binding
-        if use_native_row then page_state.native_bool_claimed = true end
         index_binding(binding)
         return true
     end
@@ -793,92 +1012,74 @@ return function(dependencies)
     local function initialize_mod_settings_page(runtime, page, page_state, panel)
         if page_state.initialized == true then return true end
 
-        local rows = runtime:try(function() return page.m_SettingsRowWidgets end)
-        local native_bool_row = nil
-        local native_test_rows = {}
-        if rows ~= nil then
-            for index = 1, #rows do
-                local row = runtime:unwrap(runtime:try(function() return rows[index] end))
-                local setting = runtime:unwrap(runtime:try(function()
-                    return row.m_Setting
-                end))
-                local setting_name = object_full_name(setting)
-                if setting_name:find(
-                    "SettingObject_Bool_Test", 1, true) ~= nil
-                then
-                    native_bool_row = row
-                elseif setting_name:find("SettingObject_Int_Test", 1, true)
-                        ~= nil
-                    or setting_name:find("SettingObject_Float_Test", 1, true)
-                        ~= nil
-                    or setting_name:find("SettingObject_Enum_Test", 1, true)
-                        ~= nil
-                then
-                    table.insert(native_test_rows, row)
-                end
-            end
-        end
-        if not is_valid_object(native_bool_row) then
-            local child_count = tonumber(runtime:unwrap(runtime:try(function()
-                return panel:GetChildrenCount()
-            end))) or 0
-            for index = 0, child_count - 1 do
-                local child = runtime:unwrap(runtime:try(function()
-                    return panel:GetChildAt(index)
-                end))
-                if object_full_name(child):find("SettingsRow_Bool", 1, true) ~= nil then
-                    native_bool_row = child
+        local native_rows = {}
+        local native_row_keys = {}
+        local function add_native_row(row)
+            if not is_valid_object(row) then return end
+            -- Every API row uses the same typed Test setting classes as the
+            -- original examples. A later mod can therefore distinguish them
+            -- only by the five stable WidgetTree row names, not by setting
+            -- class. Generated rows have runtime W_SettingsRow_C_* names.
+            if not is_native_test_row(row) then return end
+            local setting = runtime:unwrap(runtime:try(function()
+                return row.m_Setting
+            end))
+            if not is_valid_object(setting) then return end
+
+            local setting_name = object_full_name(setting)
+            local is_native_test_setting = false
+            for _, setting_type in pairs(GAME_SETTING_TYPES) do
+                if setting_name:find(setting_type.native_name, 1, true) ~= nil then
+                    is_native_test_setting = true
                     break
                 end
             end
-        end
-        if not is_valid_object(native_bool_row) then return false end
-        local native_bool_setting = runtime:unwrap(runtime:try(function()
-            return native_bool_row.m_Setting
-        end))
-        if not is_valid_object(native_bool_setting) then return false end
+            if not is_native_test_setting then return end
 
-        -- Keep Gothic's fully initialized bool row and collapse the unrelated
-        -- Enum/Float/Int test rows. Removing them is temporary because the page's
-        -- native Reinitialize adds its registered rows back on activation.
-        if #native_test_rows == 0 then
-            local child_count = panel_child_count(runtime, panel) or 0
-            for index = 0, child_count - 1 do
-                local child = runtime:unwrap(runtime:try(function()
-                    return panel:GetChildAt(index)
-                end))
-                local setting = runtime:unwrap(runtime:try(function()
-                    return child.m_Setting
-                end))
-                local setting_name = object_full_name(setting)
-                if setting_name:find("SettingObject_Int_Test", 1, true) ~= nil
-                    or setting_name:find("SettingObject_Float_Test", 1, true)
-                        ~= nil
-                    or setting_name:find("SettingObject_Enum_Test", 1, true)
-                        ~= nil
-                then
-                    table.insert(native_test_rows, child)
-                end
+            local row_key = object_identity(row)
+            if row_key == "" or native_row_keys[row_key] == true then return end
+            native_row_keys[row_key] = true
+
+            table.insert(native_rows, {
+                row = row,
+            })
+        end
+
+        local rows = runtime:try(function() return page.m_SettingsRowWidgets end)
+        if rows ~= nil then
+            for index = 1, #rows do
+                add_native_row(runtime:unwrap(runtime:try(function()
+                    return rows[index]
+                end)))
             end
         end
-        page_state.native_test_rows = {}
-        for _, child in ipairs(native_test_rows) do
-            set_widget_visibility(runtime, child, WIDGET_VISIBILITY_COLLAPSED)
-            table.insert(page_state.native_test_rows, child)
+
+        local child_count = panel_child_count(runtime, panel)
+        if child_count ~= nil then
+            for index = 0, child_count - 1 do
+                add_native_row(runtime:unwrap(runtime:try(function()
+                    return panel:GetChildAt(index)
+                end)))
+            end
         end
+        if #native_rows == 0 then return false end
 
         page_state.bindings = {}
         page_state.headers = {}
-        page_state.native_bool_row = native_bool_row
-        page_state.native_bool_claimed = false
+        page_state.native_rows = native_rows
+        for _, candidate in ipairs(native_rows) do
+            set_widget_visibility(runtime, candidate.row,
+                WIDGET_VISIBILITY_COLLAPSED)
+        end
         page_state.initialized = true
         return true
     end
 
-    local function collapse_native_test_rows(runtime, page_state)
-        for _, row in ipairs(page_state.native_test_rows or {}) do
-            if is_valid_object(row) then
-                set_widget_visibility(runtime, row, WIDGET_VISIBILITY_COLLAPSED)
+    local function hide_native_test_rows(runtime, page_state)
+        for _, candidate in ipairs(page_state.native_rows or {}) do
+            if is_valid_object(candidate.row) then
+                set_widget_visibility(runtime, candidate.row,
+                    WIDGET_VISIBILITY_COLLAPSED)
             end
         end
     end
@@ -886,6 +1087,15 @@ return function(dependencies)
     local function inject_game_settings(runtime, page)
         page = runtime:unwrap(page)
         if not is_mod_settings_page(page) then return false end
+        local scroll_box = runtime:unwrap(runtime:try(function()
+            return page.ScrollBox_Content
+        end))
+        if is_valid_object(scroll_box)
+            and not set_widget_clipping(runtime, scroll_box,
+                WIDGET_CLIPPING_CLIP_TO_BOUNDS)
+        then
+            runtime:debug_log("native Mods settings scroll clipping failed")
+        end
         local panel = runtime:unwrap(runtime:try(function()
             return page.VerticalBox_Content
         end))
@@ -902,7 +1112,7 @@ return function(dependencies)
             runtime:log("Could not initialize the native Mods settings page")
             return false
         end
-        collapse_native_test_rows(runtime, page_state)
+        hide_native_test_rows(runtime, page_state)
 
         local injected = 0
         for _, id in ipairs(game_settings_state.order) do
@@ -910,7 +1120,7 @@ return function(dependencies)
             if entry ~= nil then
                 ensure_mod_header(runtime, page, page_state, panel, entry.section)
             end
-            if entry ~= nil and inject_bool_setting(runtime, page, page_state, entry,
+            if entry ~= nil and inject_setting(runtime, page, page_state, entry,
                 panel)
             then
                 injected = injected + 1
@@ -920,7 +1130,7 @@ return function(dependencies)
         for _, binding in pairs(page_state.bindings) do
             enable_binding(binding)
         end
-        collapse_native_test_rows(runtime, page_state)
+        hide_native_test_rows(runtime, page_state)
         return injected > 0
     end
 
@@ -1107,10 +1317,29 @@ return function(dependencies)
         return inject_game_settings(runtime, page)
     end
 
-    local function apply_bool_setting_value(binding, value)
+    local function persist_setting_value(entry, value)
+        if type(entry.persist) ~= "table" then return true end
+
+        local path = resolve_persist_value(entry.persist.path)
+        local key = resolve_persist_value(entry.persist.key)
+        if path == nil or key == nil then return true end
+
+        local serialized = value
+        if type(entry.persist.serialize) == "function" then
+            local ok, result = pcall(entry.persist.serialize, value)
+            if not ok then return false end
+            serialized = result
+        elseif type(value) == "boolean" then
+            serialized = value and "true" or "false"
+        end
+        return update_ini_value(path, key, tostring(serialized))
+    end
+
+    local function apply_setting_value(binding, value)
         local entry = binding.entry
         local runtime = entry.runtime
-        value = value == true
+        value = coerce_setting_value(entry, value)
+        if value == nil then return false end
 
         local accepted = true
         if type(entry.set) == "function" then
@@ -1122,15 +1351,10 @@ return function(dependencies)
             end
         end
 
-        if accepted and type(entry.persist) == "table" then
-            local path = resolve_persist_value(entry.persist.path)
-            local key = resolve_persist_value(entry.persist.key)
-            if path ~= nil and key ~= nil then
-                local persisted = update_ini_value(path, key,
-                    value and "true" or "false")
-                if not persisted then
-                    runtime:log("Could not persist game setting '" .. entry.id .. "'")
-                end
+        if accepted then
+            local persisted = persist_setting_value(entry, value)
+            if not persisted then
+                runtime:log("Could not persist game setting '" .. entry.id .. "'")
             end
         end
 
@@ -1138,27 +1362,34 @@ return function(dependencies)
         return accepted
     end
 
-    local function bool_parameter_value(runtime, parameter)
+    local function native_parameter_value(runtime, entry, parameter)
         local value = runtime:unwrap(parameter)
-        if type(value) == "boolean" then return value end
-        local text = lower(value)
-        if text == "true" or text == "1" then return true end
-        if text == "false" or text == "0" then return false end
-        return nil
+        if entry.kind == "bool" then
+            if type(value) == "boolean" then return value end
+            local text = lower(value)
+            if text == "true" or text == "1" then return true end
+            if text == "false" or text == "0" then return false end
+            return nil
+        end
+        return coerce_setting_value(entry, value)
     end
 
-    local function handle_native_bool_value(runtime, binding, parameter, source)
+    local function handle_native_setting_value(runtime, binding, parameter, source)
         if binding == nil or binding.synchronizing == true then return end
-        local value = bool_parameter_value(runtime, parameter)
+        local value = native_parameter_value(runtime, binding.entry, parameter)
         if value == nil then
             runtime:debug_log("game setting native value unavailable"
                 .. " source=" .. tostring(source)
                 .. " parameter=" .. safe_to_string(parameter))
             return
         end
-        if value == setting_value(binding.entry) then return end
+        if setting_values_equal(binding.entry, value,
+            setting_value(binding.entry))
+        then
+            return
+        end
 
-        if apply_bool_setting_value(binding, value) then
+        if apply_setting_value(binding, value) then
             -- The generic test setting is not backed by Gothic's own config. Keep
             -- its native value in sync with the mod value or the widget will read
             -- the previous value back and visually undo the user's click.
@@ -1185,13 +1416,18 @@ return function(dependencies)
                 local setting_object_value = runtime:unwrap(runtime:try(function()
                     return binding.setting:GetValue()
                 end))
-                local value = widget_value
-                if type(value) ~= "boolean" then value = setting_object_value end
+                local value = coerce_setting_value(binding.entry, widget_value)
+                if value == nil then
+                    value = coerce_setting_value(binding.entry,
+                        setting_object_value)
+                end
 
-                if type(value) == "boolean" then
+                if value ~= nil then
                     local accepted = true
-                    if value ~= setting_value(binding.entry) then
-                        accepted = apply_bool_setting_value(binding, value)
+                    if not setting_values_equal(binding.entry, value,
+                        setting_value(binding.entry))
+                    then
+                        accepted = apply_setting_value(binding, value)
                     end
 
                     -- SettingObject keeps a separate confirmed value and reverts to
@@ -1208,13 +1444,13 @@ return function(dependencies)
         end
     end
 
-    local function binding_for_bool_widget(runtime, context)
+    local function binding_for_setting_widget(runtime, context)
         local widget = runtime:unwrap(context)
         local widget_key = object_identity(widget)
         local binding = game_settings_state.bindings_by_widget[widget_key]
         if binding ~= nil then return widget, binding end
 
-        -- A settings page recreation can replace the row's bool widget after the
+        -- A settings page recreation can replace the row's setting widget after the
         -- binding was indexed. Recover it through the linked native SettingObject
         -- so the replacement widget's very first value change is not lost.
         local setting = runtime:unwrap(runtime:try(function()
@@ -1438,50 +1674,67 @@ return function(dependencies)
             end
         end
 
-        if game_settings_state.bool_widget_value_hook_registered ~= true
-            and is_valid_object(runtime:find_object(BOOL_WIDGET_SET_VALUE))
-        then
-            if runtime:register_hook(BOOL_WIDGET_SET_VALUE, noop,
-                function(context, new_value)
-                    local _, binding = binding_for_bool_widget(runtime, context)
-                    handle_native_bool_value(runtime, binding, new_value,
-                        "widget.SetValue")
-                    return nil
-                end)
-            then
-                game_settings_state.bool_widget_value_hook_registered = true
+        for kind, setting_type in pairs(GAME_SETTING_TYPES) do
+            local kind_name = kind
+            local hook_state = game_settings_state.value_hooks_registered[kind]
+            if hook_state == nil then
+                hook_state = { changed = {} }
+                game_settings_state.value_hooks_registered[kind] = hook_state
             end
-        end
 
-        if game_settings_state.bool_setting_value_hook_registered ~= true
-            and is_valid_object(runtime:find_object(BOOL_SETTING_SET_VALUE))
-        then
-            if runtime:register_hook(BOOL_SETTING_SET_VALUE, noop,
-                function(context, new_value)
-                    local setting = runtime:unwrap(context)
-                    local binding = game_settings_state.bindings_by_setting[
-                        object_identity(setting)]
-                    handle_native_bool_value(runtime, binding, new_value,
-                        "setting.SetValue")
-                    return nil
-                end)
+            if hook_state.widget ~= true
+                and is_valid_object(runtime:find_object(
+                    setting_type.widget_set_value))
             then
-                game_settings_state.bool_setting_value_hook_registered = true
+                if runtime:register_hook(setting_type.widget_set_value, noop,
+                    function(context, new_value)
+                        local _, binding = binding_for_setting_widget(runtime,
+                            context)
+                        handle_native_setting_value(runtime, binding, new_value,
+                            kind_name .. ".widget.SetValue")
+                        return nil
+                    end)
+                then
+                    hook_state.widget = true
+                end
             end
-        end
 
-        if game_settings_state.bool_widget_changed_hook_registered ~= true
-            and is_valid_object(runtime:find_object(BOOL_WIDGET_VALUE_CHANGED))
-        then
-            if runtime:register_hook(BOOL_WIDGET_VALUE_CHANGED,
-                function(context, new_value)
-                    local _, binding = binding_for_bool_widget(runtime, context)
-                    handle_native_bool_value(runtime, binding, new_value,
-                        "widget.OnValueChanged")
-                    return nil
-                end)
+            if hook_state.setting ~= true
+                and is_valid_object(runtime:find_object(
+                    setting_type.setting_set_value))
             then
-                game_settings_state.bool_widget_changed_hook_registered = true
+                if runtime:register_hook(setting_type.setting_set_value, noop,
+                    function(context, new_value)
+                        local setting = runtime:unwrap(context)
+                        local binding = game_settings_state.bindings_by_setting[
+                            object_identity(setting)]
+                        handle_native_setting_value(runtime, binding, new_value,
+                            kind_name .. ".setting.SetValue")
+                        return nil
+                    end)
+                then
+                    hook_state.setting = true
+                end
+            end
+
+            for changed_index, changed_path in ipairs(
+                setting_type.widget_changed)
+            do
+                if hook_state.changed[changed_index] ~= true
+                    and is_valid_object(runtime:find_object(changed_path))
+                then
+                    if runtime:register_hook(changed_path,
+                        function(context, new_value)
+                            local _, binding = binding_for_setting_widget(runtime,
+                                context)
+                            handle_native_setting_value(runtime, binding, new_value,
+                                kind_name .. ".widget.OnValueChanged")
+                            return nil
+                        end)
+                    then
+                        hook_state.changed[changed_index] = true
+                    end
+                end
             end
         end
     end
@@ -1518,11 +1771,19 @@ return function(dependencies)
             and game_settings_state.main_notify_registered == true
     end
 
-    local function register_game_bool_setting(runtime, options)
+    local function option_number(options, names, fallback)
+        for _, name in ipairs(names) do
+            local value = finite_number(options[name])
+            if value ~= nil then return value end
+        end
+        return fallback
+    end
+
+    local function prepare_setting_entry(runtime, options, kind, api_name)
         options = type(options) == "table" and options or {}
         local id = trim(options.id)
         if id == "" then
-            runtime:log("register_game_bool_setting requires a non-empty id")
+            runtime:log(api_name .. " requires a non-empty id")
             return nil
         end
         if type(options.get) ~= "function" or type(options.set) ~= "function" then
@@ -1530,18 +1791,101 @@ return function(dependencies)
             return nil
         end
 
-        local entry = game_settings_state.entries[id]
-        if entry == nil then table.insert(game_settings_state.order, id) end
-        entry = {
+        local section = trim(options.section or options.group or runtime.mod_name)
+        if section == "" then section = runtime.mod_name end
+        local entry = {
+            kind = kind,
             id = id,
             runtime = runtime,
-            section = trim(options.section or options.group or runtime.mod_name),
-            default = options.default == true,
+            section = section,
             get = options.get,
             set = options.set,
             persist = options.persist,
             translations = options.translations,
         }
+
+        if kind == "bool" then
+            entry.default = options.default == true
+            return entry
+        end
+
+        if kind == "enum" then
+            local values = options.values or options.options
+            if type(values) ~= "table" or #values == 0 then
+                runtime:log("enum game setting '" .. id
+                    .. "' requires a non-empty values list")
+                return nil
+            end
+            entry.values = values
+            entry.value_translations = options.value_translations
+            entry.minimum = 0
+            entry.maximum = #values - 1
+            local default = finite_number(options.default) or 0
+            entry.default = clamp_number(math.floor(default),
+                entry.minimum, entry.maximum)
+
+            local widget = lower(options.widget or options.widget_type
+                or options.style or "spinner")
+            if widget == "dropdown" or widget == "1"
+                or options.dropdown == true
+            then
+                entry.enum_widget = ENUM_WIDGET_DROPDOWN
+            elseif widget == "spinner" or widget == "0" then
+                entry.enum_widget = ENUM_WIDGET_SPINNER
+            else
+                runtime:log("enum game setting '" .. id
+                    .. "' widget must be 'spinner' or 'dropdown'")
+                return nil
+            end
+            entry.wrap_around = options.wrap_around == true
+                or options.wrap == true
+            return entry
+        end
+
+        local default_minimum = 0
+        local default_maximum = kind == "float" and 1 or 100
+        local minimum = option_number(options,
+            { "minimum", "min", "min_value" }, default_minimum)
+        local maximum = option_number(options,
+            { "maximum", "max", "max_value" }, default_maximum)
+        if kind == "int" then
+            minimum = math.floor(minimum)
+            maximum = math.floor(maximum)
+        end
+        if maximum <= minimum then
+            runtime:log(kind .. " game setting '" .. id
+                .. "' requires maximum greater than minimum")
+            return nil
+        end
+        entry.minimum = minimum
+        entry.maximum = maximum
+
+        local default = finite_number(options.default) or minimum
+        if kind == "int" then default = math.floor(default) end
+        entry.default = clamp_number(default, minimum, maximum)
+
+        if kind == "float" then
+            local step = option_number(options, { "step", "step_size" },
+                (maximum - minimum) / 100)
+            if step <= 0 then
+                runtime:log("float game setting '" .. id
+                    .. "' requires a positive step")
+                return nil
+            end
+            entry.step = step
+            entry.always_show_sign = options.always_show_sign == true
+        end
+        return entry
+    end
+
+    local function register_game_setting(runtime, options, kind, api_name)
+        local entry = prepare_setting_entry(runtime, options, kind, api_name)
+        if entry == nil then return nil end
+        local id = entry.id
+
+        if game_settings_state.entries[id] == nil then
+            table.insert(game_settings_state.order, id)
+        end
         game_settings_state.entries[id] = entry
 
         ensure_game_settings_notifications(runtime)
@@ -1564,7 +1908,30 @@ return function(dependencies)
         }
     end
 
+    local function register_game_bool_setting(runtime, options)
+        return register_game_setting(runtime, options, "bool",
+            "register_game_bool_setting")
+    end
+
+    local function register_game_int_setting(runtime, options)
+        return register_game_setting(runtime, options, "int",
+            "register_game_int_setting")
+    end
+
+    local function register_game_float_setting(runtime, options)
+        return register_game_setting(runtime, options, "float",
+            "register_game_float_setting")
+    end
+
+    local function register_game_enum_setting(runtime, options)
+        return register_game_setting(runtime, options, "enum",
+            "register_game_enum_setting")
+    end
+
     return {
         register_game_bool_setting = register_game_bool_setting,
+        register_game_int_setting = register_game_int_setting,
+        register_game_float_setting = register_game_float_setting,
+        register_game_enum_setting = register_game_enum_setting,
     }
 end

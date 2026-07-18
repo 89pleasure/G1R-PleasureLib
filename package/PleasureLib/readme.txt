@@ -2,10 +2,10 @@ PleasureLib
 
 Shared UE4SS Lua helpers for Lenna's Gothic 1 Remake mods.
 
-Version 0.4.67
+Version 0.5.0
 
-Includes an API for localized native ON/OFF settings under
-Settings -> Mods.
+Includes an API for localized native Bool, Int, Float, and Enum settings
+under Settings -> Mods.
 
 Install this folder into the game's UE4SS Mods directory:
 
