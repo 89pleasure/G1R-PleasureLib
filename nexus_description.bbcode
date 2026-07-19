@@ -9,23 +9,23 @@ PleasureLib is not a gameplay mod by itself. It is a lightweight dependency for 
 PleasureLib currently provides generic helpers for:
 
 [list]
-[*]Mod-prefixed logging
-[*]Safe pcall wrappers
-[*]Simple INI parsing
-[*]Targeted INI value updates without discarding comments or unrelated options
-[*]Boolean and list parsing
-[*]Text file read/write helpers
-[*]Defensive UE object validation
-[*]UE4SS wrapper unwrapping
-[*]Cached StaticFindObject lookup
-[*]Safe FindAllOf access
-[*]Delayed callbacks and game-thread callbacks
-[*]Defensive hook registration
-[*]Focused runtime capture of newly created UE objects
-[*]Localized native Bool, Int, Float, and Enum settings on a dedicated Settings -> Mods page
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Core-Utilities#logging-and-protected-calls]Mod-prefixed logging[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Core-Utilities#logging-and-protected-calls]Safe pcall wrappers[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Core-Utilities#strings-and-config]Simple INI parsing[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Core-Utilities#files]Targeted INI value updates[/url] without discarding comments or unrelated options
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Core-Utilities#strings-and-config]Boolean and list parsing[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Core-Utilities#files]Text file read/write helpers[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Unreal-and-Runtime#unreal-values-and-objects]Defensive UE object validation[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Unreal-and-Runtime#unreal-values-and-objects]UE4SS wrapper unwrapping[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Unreal-and-Runtime#object-lookup]Cached StaticFindObject lookup[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Unreal-and-Runtime#object-lookup]Safe FindAllOf access[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Unreal-and-Runtime#timing]Delayed callbacks and game-thread callbacks[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Unreal-and-Runtime#hooks]Defensive hook registration[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/API-Unreal-and-Runtime#runtime-object-capture]Focused runtime capture of newly created UE objects[/url]
+[*][url=https://github.com/89pleasure/G1R-PleasureLib/wiki/Native-Game-Settings]Localized native Bool, Int, Float, and Enum settings[/url] on a dedicated Settings -> Mods page
 [/list]
 
-The native settings API activates the game's unused native test page as a dedicated Mods category. It creates native settings rows and widgets, groups them by mod, and can persist changes to a mod INI.
+The [url=https://github.com/89pleasure/G1R-PleasureLib/wiki/Native-Game-Settings]native settings API[/url] activates the game's unused native test page as a dedicated Mods category. It creates native settings rows and widgets, groups them by mod, and supports [url=https://github.com/89pleasure/G1R-PleasureLib/wiki/Native-Game-Settings#persistence]optional INI persistence[/url].
 
 Version 0.4.0 moves mod settings out of the vanilla Game page. The dedicated Mods page owns its complete row container, avoiding conflicts with category reinitialization and allowing every mod to receive its own section.
 
