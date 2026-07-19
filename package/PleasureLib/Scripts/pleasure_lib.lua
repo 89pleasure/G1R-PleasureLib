@@ -1,4 +1,4 @@
-local VERSION = "0.5.0"
+local VERSION = "0.5.1"
 
 if type(_G) == "table" and type(rawget(_G, "PleasureLib")) == "table"
     and rawget(_G, "PleasureLib").VERSION == VERSION

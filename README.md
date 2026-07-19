@@ -65,7 +65,7 @@ shared by all four types.
 
 ## Current Status
 
-Stable. Current version: `0.5.0`.
+Stable. Current version: `0.5.1`.
 
 PleasureLib is used by multiple released mods, including Extended Item
 Tooltips, QuickBites, and Let Snaf Cook. The public API remains deliberately

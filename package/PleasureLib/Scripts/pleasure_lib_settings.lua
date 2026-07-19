@@ -23,6 +23,10 @@ return function(dependencies)
         .. "K2Node_ComponentBoundEvent_1_"
         .. "OnActiveIndexChangedDelegate__DelegateSignature"
     local SETTINGS_PAGE_REINITIALIZE = "/Script/G1R.SettingsPageWidget:Reinitialize"
+    local GAME_SETTINGS_DETAILS_CLASS =
+        "/Game/UI/CoreMenus/Settings/W_SettingsDetails.W_SettingsDetails_C"
+    local SETTINGS_DETAILS_SET = GAME_SETTINGS_DETAILS_CLASS .. ":SetDetails"
+    local SETTINGS_DETAILS_CLEAR = GAME_SETTINGS_DETAILS_CLASS .. ":ClearDetails"
     local SETTINGS_PAGE_APPLY_CHANGES = "/Script/G1R.SettingsPageWidget:ApplyChanges"
     local SETTINGS_PAGE_DISCARD_CHANGES = "/Script/G1R.SettingsPageWidget:DiscardChanges"
     local GAME_SETTINGS_ROW_CLASS =
@@ -31,6 +35,8 @@ return function(dependencies)
         GAME_SETTINGS_ROW_CLASS .. ":Create Setting Widget"
     local GAME_SETTINGS_ROW_SET_ENABLED =
         GAME_SETTINGS_ROW_CLASS .. ":Set Enabled Selectable"
+    local GAME_SETTINGS_ROW_UPDATE_VISUALS =
+        GAME_SETTINGS_ROW_CLASS .. ":Update Visuals"
     local GAME_SETTINGS_HEADER_CLASS =
         "/Game/UI/CoreMenus/Settings/W_SettingsSectionHeader.W_SettingsSectionHeader_C"
     local WIDGET_BLUEPRINT_LIBRARY = "/Script/UMG.Default__WidgetBlueprintLibrary"
@@ -133,6 +139,7 @@ return function(dependencies)
         active_page_changed_hook_registered = false,
         page_activated_hook_registered = false,
         page_reinitialize_hook_registered = false,
+        row_visuals_hook_registered = false,
         page_apply_hook_registered = false,
         page_discard_hook_registered = false,
         value_hooks_registered = {},
@@ -140,6 +147,7 @@ return function(dependencies)
         create_page_button_batches = {},
         bindings_by_widget = {},
         bindings_by_setting = {},
+        bindings_by_row = {},
     }
 
     local function object_identity(object)
@@ -707,6 +715,8 @@ return function(dependencies)
     end
 
     local function unindex_binding(binding)
+        local row_key = object_identity(binding and binding.row)
+        if row_key ~= "" then game_settings_state.bindings_by_row[row_key] = nil end
         local widget_key = object_identity(binding and binding.widget)
         if widget_key ~= "" then game_settings_state.bindings_by_widget[widget_key] = nil end
         local setting_key = object_identity(binding and binding.setting)
@@ -714,6 +724,10 @@ return function(dependencies)
     end
 
     local function index_binding(binding)
+        local row_key = object_identity(binding.row)
+        if row_key ~= "" then
+            game_settings_state.bindings_by_row[row_key] = binding
+        end
         local widget_key = object_identity(binding.widget)
         if widget_key ~= "" then
             game_settings_state.bindings_by_widget[widget_key] = binding
@@ -722,6 +736,52 @@ return function(dependencies)
         if setting_key ~= "" then
             game_settings_state.bindings_by_setting[setting_key] = binding
         end
+    end
+
+    local function binding_for_game_settings_row(row)
+        local binding = game_settings_state.bindings_by_row[
+            object_identity(row)]
+        if binding == nil
+            or not is_valid_object(binding.page)
+            or object_identity(binding.row) ~= object_identity(row)
+        then
+            return nil
+        end
+        return binding
+    end
+
+    local function update_game_settings_details(runtime, binding, selected)
+        local details = runtime:unwrap(runtime:try(function()
+            return binding.page.m_SettingsDetailWidget
+        end))
+        if not is_valid_object(details) then return false end
+
+        if selected == true then
+            local description = runtime:try(function()
+                return binding.setting.m_Description
+            end)
+            local set_details = runtime:find_object(SETTINGS_DETAILS_SET)
+            if description == nil or not is_valid_object(set_details) then
+                return false
+            end
+            return runtime:try(function()
+                set_details(details, description)
+                return true
+            end) == true
+        end
+
+        local clear_details = runtime:find_object(SETTINGS_DETAILS_CLEAR)
+        if not is_valid_object(clear_details) then return false end
+        return runtime:try(function()
+            clear_details(details)
+            return true
+        end) == true
+    end
+
+    local function update_details_for_game_settings_row(runtime, row, selected)
+        local binding = binding_for_game_settings_row(row)
+        if binding == nil then return end
+        update_game_settings_details(runtime, binding, selected)
     end
 
     local function retain_registered_binding(runtime, binding)
@@ -1649,6 +1709,23 @@ return function(dependencies)
                 end)
             then
                 game_settings_state.page_reinitialize_hook_registered = true
+            end
+        end
+
+        if game_settings_state.row_visuals_hook_registered ~= true
+            and is_valid_object(runtime:find_object(
+                GAME_SETTINGS_ROW_UPDATE_VISUALS))
+        then
+            if runtime:register_hook(GAME_SETTINGS_ROW_UPDATE_VISUALS,
+                function(context, is_focused)
+                    update_details_for_game_settings_row(
+                        runtime,
+                        runtime:unwrap(context),
+                        runtime:unwrap(is_focused) == true)
+                    return nil
+                end
+            ) then
+                game_settings_state.row_visuals_hook_registered = true
             end
         end
 

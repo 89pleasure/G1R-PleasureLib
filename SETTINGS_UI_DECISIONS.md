@@ -359,3 +359,61 @@ state to its nested Slate widgets.
 
 A complete cold-start test on 2026-07-18 confirmed that rows are clipped at
 both visual scroll boundaries.
+
+## Generated row details routing
+
+On 2026-07-19 the right-hand setting description no longer appeared when a
+PleasureLib-generated row was hovered or focused. The description data itself
+was valid: every generated SettingObject contained the localized
+`m_DisplayName` and `m_Description` values.
+
+The regression came from row ownership. The earlier Bool-only API reused the
+native `SettingsRow_Bool`, whose selection delegate had already been connected
+by the page. Version `0.5.0` correctly gives every registration its own row,
+but those rows are appended to `m_SettingsRowWidgets` after the page's native
+initialization. A live dump of a generated row confirmed an empty
+`m_OnSelectionChangedBP` delegate, so its selection event never reached
+`SettingsPageWidget:OnRowSelectionChanged` and the details widget was not
+updated.
+
+Do not use `MulticastDelegateProperty:Add` to repair this connection; the
+installed UE4SS delegate bug documented above still applies. Do not call the
+whole page `Reinitialize()` merely to rebuild delegates because that also
+owns the native Test rows and has a history of lifecycle side effects.
+
+The first test candidate indexed only PleasureLib-generated rows and hooked
+the concrete `W_SettingsRow_C:OnSelectionChanged` function. A cold-start test
+showed that mouse hover still produced no details. The object dump explains
+why: mouse hover enters the inherited `AlkUserWidget:OnHovered` and
+`OnUnhovered` functions, while the row's selection function is not a complete
+mouse-input route.
+
+The second candidate retained the concrete selection hook for keyboard and
+gamepad focus and also hooked those two inherited hover functions. A
+cold-start mouse test still produced no details, so inherited hover events are
+not a proven generated-row signal in this screen.
+
+The confirmed implementation hooks the concrete Blueprint
+`W_SettingsRow:Update Visuals` function. Its `Is Focused` argument drives the
+row's visible hover/focus state, so it is a stronger integration point than an
+inherited input event. For an exact generated-row match, PleasureLib directly
+calls the concrete `W_SettingsDetails_C:SetDetails` or `ClearDetails`
+Blueprint function. The route uses the generated SettingObject's stored
+`m_Description` and does not construct or copy a delegate.
+
+The first direct-call test proved that `Update Visuals` fires with the correct
+true/false state. Calling the reflected base
+`/Script/G1R.SettingsDetailsWidget:SetDetails` returned successfully for the
+Bool row but displayed nothing, while inherited `GetDescription()` lookup
+failed for the Int row. The base function does not execute the concrete
+`W_SettingsDetails_C` Blueprint body when invoked this way. The corrected
+implementation therefore calls the concrete Blueprint `SetDetails` and
+`ClearDetails` functions and passes the already-populated `m_Description`
+struct directly.
+
+Every callback first resolves the exact widget address in the current
+isolated runtime's generated-row index. Vanilla widgets and rows owned by
+another isolated mod runtime are ignored. A complete cold-start mouse test on
+2026-07-19 confirmed that both generated Bool and Int descriptions appear in
+the right-hand panel. The failed selection and inherited hover hooks and the
+temporary detail diagnostics were then removed.
